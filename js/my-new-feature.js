@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）自动字卡系统 - 最终精装修版
+ * 赛博伴侣（梦角）自动字卡系统 - 最终备份增强版
  * 
  * 存储键：localStorage['my-audit-cards']
  * 数据结构：{ categories: { '主谓宾': [...] }, categoryOrder: [...], pending: [...] }
@@ -234,6 +234,16 @@
   }
   .ca-hint { margin-left: auto; font-size: 12px; color: #a0a6b5; }
 
+  /* 头部的导出导入按钮区域 */
+  .ca-head-actions {
+    display: flex; align-items: center; gap: 8px; margin-left: auto;
+  }
+  .ca-text-btn {
+    padding: 4px 10px; border: 1px solid #dfe3ec; border-radius: 6px; background: #fff;
+    font-size: 12px; color: #4a5060; cursor: pointer; transition: all .15s ease;
+  }
+  .ca-text-btn:hover { background: #f0f5ff; border-color: #c7d7ff; color: #2f6bff; }
+
   .ca-form { display: flex; gap: 8px; flex-wrap: wrap; }
   .ca-input {
     flex: 1 1 220px; min-width: 0; padding: 9px 12px; border: 1px solid #dfe3ec; border-radius: 8px;
@@ -427,13 +437,18 @@
         <section class="ca-section">
           <div class="ca-section-head">
             <h3 class="ca-h3">字卡库分类</h3>
-            <span class="ca-hint ca-total">共 0 张</span>
+            <div class="ca-head-actions">
+              <span class="ca-hint ca-total" style="margin-left: 0;">共 0 张</span>
+              <button type="button" class="ca-text-btn ca-export-btn">导出</button>
+              <button type="button" class="ca-text-btn ca-import-btn">导入</button>
+            </div>
           </div>
           <div class="ca-cats"></div>
           <button type="button" class="ca-add-cat-btn">+ 新建分类</button>
         </section>
       </div>
     </div>
+    <input type="file" class="ca-file-input" accept=".json" style="display: none;">
   `;
 
   const closeBtn    = overlay.querySelector('.ca-close');
@@ -445,12 +460,16 @@
   const catsEl      = overlay.querySelector('.ca-cats');
   const totalHintEl = overlay.querySelector('.ca-total');
   const addCatBtn   = overlay.querySelector('.ca-add-cat-btn');
+  
+  const exportBtn   = overlay.querySelector('.ca-export-btn');
+  const importBtn   = overlay.querySelector('.ca-import-btn');
+  const fileInput   = overlay.querySelector('.ca-file-input');
 
   /* =====================================================================
    * 5. 渲染逻辑
    * =================================================================== */
   let expandedCat = null;
-  let dragSrcCat = null; // 记录当前拖拽的分类名
+  let dragSrcCat = null;
 
   function refreshFormSelect() {
     const current = selectEl.value;
@@ -536,12 +555,10 @@
     badgeEl.textContent = String(store.pending.length);
   }
 
-  // 渲染分类列表与批量操作
   function renderCategories() {
     catsEl.innerHTML = '';
     let total = 0;
 
-    // 按照保存的顺序进行渲染
     store.categoryOrder.forEach(function (name) {
       const arr = store.categories[name];
       if (!arr) return;
@@ -549,8 +566,6 @@
 
       const row = document.createElement('div');
       row.className = 'ca-cat-row' + (expandedCat === name ? ' is-active' : '');
-      
-      // 拖拽支持
       row.setAttribute('draggable', 'true');
       
       row.addEventListener('dragstart', function (e) {
@@ -582,16 +597,14 @@
           const fromIdx = store.categoryOrder.indexOf(dragSrcCat);
           const toIdx = store.categoryOrder.indexOf(name);
           if (fromIdx > -1 && toIdx > -1) {
-            // 交换顺序
             store.categoryOrder.splice(fromIdx, 1);
             store.categoryOrder.splice(toIdx, 0, dragSrcCat);
             writeStore(store);
-            renderCategories(); // 重新渲染
+            renderCategories(); 
           }
         }
       });
 
-      // 分类头部
       const catHeader = document.createElement('div');
       catHeader.className = 'ca-cat';
       catHeader.addEventListener('click', function (e) {
@@ -616,7 +629,6 @@
       catHeader.appendChild(nameEl);
       catHeader.appendChild(countEl);
 
-      // 操作按钮
       const ops = document.createElement('div');
       ops.className = 'ca-cat-ops';
       if (name !== FALLBACK_CAT) {
@@ -640,7 +652,6 @@
       catHeader.appendChild(ops);
       row.appendChild(catHeader);
 
-      // 展开列表
       if (expandedCat === name) {
         const box = document.createElement('div');
         box.className = 'ca-cards-box';
@@ -651,7 +662,6 @@
           empty.textContent = '该分类暂无字卡';
           box.appendChild(empty);
         } else {
-          // 批量操作头部
           const batchHeader = document.createElement('div');
           batchHeader.className = 'ca-batch-header';
           
@@ -668,7 +678,6 @@
           batchHeader.appendChild(selectAllLabel);
           box.appendChild(batchHeader);
 
-          // 字卡列表
           arr.forEach(function (card) {
             const wrap = document.createElement('div');
             wrap.className = 'ca-card';
@@ -706,13 +715,11 @@
             box.appendChild(wrap);
           });
 
-          // 全选逻辑绑定
           selectAllCb.addEventListener('change', function () {
             const cbs = box.querySelectorAll('.ca-card-select');
             cbs.forEach(c => c.checked = selectAllCb.checked);
           });
 
-          // 批量删除底部
           const batchFooter = document.createElement('div');
           batchFooter.className = 'ca-batch-footer';
           
@@ -849,7 +856,6 @@
     if (!trimmed || trimmed === oldName) return;
     if (store.categories[trimmed]) { alert('该名称已存在！'); return; }
 
-    // 迁移数据与顺序
     store.categories[trimmed] = store.categories[oldName];
     delete store.categories[oldName];
     
@@ -888,7 +894,54 @@
   addCatBtn.addEventListener('click', addCategory);
 
   /* =====================================================================
-   * 7. 模块一：自动抓取
+   * 7. 导入与导出功能
+   * =================================================================== */
+  // 导出
+  exportBtn.addEventListener('click', function () {
+    loadStore(); // 确保导出的是当前最新状态
+    const dataStr = JSON.stringify(store, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'my-cards-backup.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  // 导入
+  importBtn.addEventListener('click', function () {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function (event) {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (parsed && typeof parsed === 'object') {
+          store = normalizeStore(parsed); // 清洗数据防崩溃
+          writeStore(store);
+          renderAll();
+          alert('字卡数据导入成功！');
+        } else {
+          alert('导入失败：文件格式不正确。');
+        }
+      } catch (err) {
+        alert('导入失败：JSON 文件解析出错。');
+      }
+      fileInput.value = ''; // 清空 input 允许重复选相同文件
+    };
+    reader.readAsText(file);
+  });
+
+  /* =====================================================================
+   * 8. 模块一：自动抓取
    * =================================================================== */
   function getMsgText(m) {
     if (!m || typeof m !== 'object') return '';
@@ -987,7 +1040,7 @@
   }
 
   /* =====================================================================
-   * 8. 静默提醒与 UI 控制
+   * 9. 静默提醒与 UI 控制
    * =================================================================== */
   let unread = 0;
 
@@ -1044,7 +1097,7 @@
   if (document.body) { mount(); } else { document.addEventListener('DOMContentLoaded', mount); }
 
   /* =====================================================================
-   * 9. 调试接口
+   * 10. 调试接口
    * =================================================================== */
   window.CardAudit = {
     open: openModal,
