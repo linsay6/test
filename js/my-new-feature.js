@@ -1,9 +1,8 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）自动字卡系统 - 最终备份增强版
+ * 赛博伴侣（梦角）自动字卡系统 - 最终融合版
  * 
  * 存储键：localStorage['my-audit-cards']
- * 数据结构：{ categories: { '主谓宾': [...] }, categoryOrder: [...], pending: [...] }
  * ========================================================================= */
 (function () {
   'use strict';
@@ -16,9 +15,10 @@
    * =================================================================== */
   const STORAGE_KEY   = 'my-audit-cards';
   const CHAT_MSGS_KEY = 'xy-home-v2:default:chat-msgs';
+  const TARGET_CARD_KEY = 'xy-home-v2:default:chatcard-tail'; // 原网站字卡库存储键
   const DEFAULT_CATS  = ['主谓宾', '标点', '量词', '形容词', '虚词', '未分类'];
   const FALLBACK_CAT  = '未分类';
-  const DEFAULT_USER  = '梦角'; // 统一发件人名称
+  const DEFAULT_USER  = '梦角'; 
 
   const TICK_MS       = 10 * 60 * 1000; 
   const GRAB_PROB     = 0.1;            
@@ -55,7 +55,7 @@
     DEFAULT_CATS.forEach(function (c) { categories[c] = []; });
     return { 
       categories: categories, 
-      categoryOrder: [...DEFAULT_CATS], // 初始化顺序
+      categoryOrder: [...DEFAULT_CATS],
       pending: [] 
     };
   }
@@ -64,7 +64,6 @@
     const out = makeEmptyStore();
     if (!raw || typeof raw !== 'object') return out;
 
-    // 处理分类字典
     if (raw.categories && typeof raw.categories === 'object') {
       DEFAULT_CATS.forEach(function (c) {
         if (!Array.isArray(raw.categories[c])) raw.categories[c] = [];
@@ -76,7 +75,7 @@
           .filter(function (x) { return x && typeof x.text === 'string' && x.text.trim(); })
           .map(function (x) {
             let u = typeof x.user === 'string' ? x.user : DEFAULT_USER;
-            if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER; // 强制修正旧数据
+            if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER;
             return {
               id: typeof x.id === 'string' ? x.id : uid(),
               text: String(x.text),
@@ -88,10 +87,8 @@
       });
     }
 
-    // 处理分类顺序 (拖拽排序支持)
     if (Array.isArray(raw.categoryOrder)) {
       out.categoryOrder = raw.categoryOrder.filter(c => out.categories[c]);
-      // 补充漏掉的分类
       Object.keys(out.categories).forEach(c => {
         if (!out.categoryOrder.includes(c)) out.categoryOrder.push(c);
       });
@@ -99,7 +96,6 @@
       out.categoryOrder = Object.keys(out.categories);
     }
 
-    // 处理待审核
     if (Array.isArray(raw.pending)) {
       out.pending = raw.pending
         .filter(function (x) { return x && typeof x.text === 'string' && x.text.trim(); })
@@ -107,7 +103,7 @@
           let cat = typeof x.category === 'string' ? x.category : FALLBACK_CAT;
           if (!out.categories[cat]) cat = FALLBACK_CAT;
           let u = typeof x.user === 'string' ? x.user : DEFAULT_USER;
-          if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER; // 强制修正旧数据
+          if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER;
           return {
             id: typeof x.id === 'string' ? x.id : uid(),
             text: String(x.text),
@@ -234,10 +230,7 @@
   }
   .ca-hint { margin-left: auto; font-size: 12px; color: #a0a6b5; }
 
-  /* 头部的导出导入按钮区域 */
-  .ca-head-actions {
-    display: flex; align-items: center; gap: 8px; margin-left: auto;
-  }
+  .ca-head-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
   .ca-text-btn {
     padding: 4px 10px; border: 1px solid #dfe3ec; border-radius: 6px; background: #fff;
     font-size: 12px; color: #4a5060; cursor: pointer; transition: all .15s ease;
@@ -294,7 +287,6 @@
     border: 1px dashed #e2e7f0; border-radius: 12px; background: #fbfcfe; list-style: none;
   }
 
-  /* 分类管理 */
   .ca-cats { display: flex; flex-direction: column; gap: 8px; }
   .ca-cat-row {
     border: 1px solid #eceff5; border-radius: 12px; background: #fff; overflow: hidden;
@@ -331,7 +323,6 @@
   .ca-cat-row.is-active { border-color: #c7d7ff; box-shadow: 0 0 0 3px rgba(47, 107, 255, .08); }
   .ca-cat-row.is-active .ca-cat-name { color: #2f6bff; }
 
-  /* 展开的字卡面板与批量操作 */
   .ca-cards-box {
     padding: 8px 14px 12px; border-top: 1px dashed #edf0f6;
     display: flex; flex-direction: column; gap: 6px; background: #fbfcfe;
@@ -367,7 +358,6 @@
   }
   .ca-btn-danger:hover { background: #ff1a1c; }
 
-  /* 新建分类按钮 */
   .ca-add-cat-btn {
     margin-top: 6px; padding: 12px; border: 1px dashed #dfe3ec; border-radius: 12px;
     background: #fbfcfe; color: #8a90a2; font-size: 13px; font-weight: 600;
@@ -896,9 +886,8 @@
   /* =====================================================================
    * 7. 导入与导出功能
    * =================================================================== */
-  // 导出
   exportBtn.addEventListener('click', function () {
-    loadStore(); // 确保导出的是当前最新状态
+    loadStore();
     const dataStr = JSON.stringify(store, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -911,7 +900,6 @@
     URL.revokeObjectURL(url);
   });
 
-  // 导入
   importBtn.addEventListener('click', function () {
     fileInput.click();
   });
@@ -925,7 +913,7 @@
       try {
         const parsed = JSON.parse(event.target.result);
         if (parsed && typeof parsed === 'object') {
-          store = normalizeStore(parsed); // 清洗数据防崩溃
+          store = normalizeStore(parsed);
           writeStore(store);
           renderAll();
           alert('字卡数据导入成功！');
@@ -935,7 +923,7 @@
       } catch (err) {
         alert('导入失败：JSON 文件解析出错。');
       }
-      fileInput.value = ''; // 清空 input 允许重复选相同文件
+      fileInput.value = '';
     };
     reader.readAsText(file);
   });
@@ -1086,8 +1074,156 @@
     if (e.key === 'Enter') { e.preventDefault(); submitApplication(); }
   });
 
+  /* =====================================================================
+   * 10. 原网站字卡数据融合（拦截器）
+   * =================================================================== */
+  function setupCardInterceptor() {
+    try {
+      if (window.__CARD_AUDIT_INTERCEPTOR_DONE__) return;
+      window.__CARD_AUDIT_INTERCEPTOR_DONE__ = true;
+
+      const originalGetItem = Storage.prototype.getItem;
+      const originalSetItem = Storage.prototype.setItem;
+
+      // 拦截读取操作
+      Storage.prototype.getItem = function (key) {
+        const value = originalGetItem.call(this, key);
+        if (key !== TARGET_CARD_KEY) return value;
+
+        try {
+          // 1. 获取我的插件的字卡库
+          const myRaw = originalGetItem.call(this, STORAGE_KEY);
+          if (!myRaw) return value;
+
+          const myStore = JSON.parse(myRaw);
+          const myTexts = [];
+          if (myStore && myStore.categories) {
+            Object.keys(myStore.categories).forEach(function (cat) {
+              const arr = myStore.categories[cat];
+              if (Array.isArray(arr)) {
+                arr.forEach(function (c) {
+                  if (c && typeof c.text === 'string' && c.text.trim()) {
+                    myTexts.push(c.text.trim());
+                  }
+                });
+              }
+            });
+          }
+          if (myTexts.length === 0) return value; // 无字卡直接返回原值
+
+          // 2. 解析原网站的数据
+          let origArr = [];
+          let origObjRoot = null;
+          let isObjMode = false;
+          let template = null;
+
+          if (value) {
+            try {
+              const parsed = JSON.parse(value);
+              if (Array.isArray(parsed)) {
+                origArr = parsed;
+                if (parsed.length > 0 && typeof parsed[0] === 'object' && parsed[0] !== null) {
+                  isObjMode = true;
+                  template = parsed[0];
+                }
+              } else if (typeof parsed === 'object' && parsed !== null) {
+                // 深度兼容：如果原站包了一层对象，如 { tail: [...] }
+                const keys = ['tail', 'list', 'items', 'data'];
+                for (let k of keys) {
+                  if (Array.isArray(parsed[k])) {
+                    origArr = parsed[k];
+                    origObjRoot = parsed;
+                    if (parsed[k].length > 0 && typeof parsed[k][0] === 'object' && parsed[k][0] !== null) {
+                      isObjMode = true;
+                      template = parsed[k][0];
+                    }
+                    break;
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+
+          // 3. 提取原库现有文本以去重
+          const existingTexts = new Set();
+          origArr.forEach(function (item) {
+            if (typeof item === 'string') {
+              existingTexts.add(item);
+            } else if (item && typeof item === 'object') {
+              for (let k in item) {
+                if (typeof item[k] === 'string') {
+                  existingTexts.add(item[k]);
+                  break;
+                }
+              }
+            }
+          });
+
+          // 4. 合并我的字卡
+          let changed = false;
+          myTexts.forEach(function (t) {
+            if (!existingTexts.has(t)) {
+              if (isObjMode && template) {
+                const newObj = JSON.parse(JSON.stringify(template));
+                let textReplaced = false;
+                for (let k in newObj) {
+                  if (k === 'id' || k === 'uuid' || k === 'key') {
+                    newObj[k] = 'my_' + Math.random().toString(36).slice(2, 9);
+                  } else if (typeof newObj[k] === 'string' && !textReplaced) {
+                    newObj[k] = t;
+                    textReplaced = true;
+                  } else if (typeof newObj[k] === 'number') {
+                    newObj[k] = 0;
+                  } else if (typeof newObj[k] === 'boolean') {
+                    newObj[k] = false;
+                  }
+                }
+                if (!textReplaced) newObj.text = t;
+                origArr.push(newObj);
+              } else {
+                origArr.push(t);
+              }
+              existingTexts.add(t);
+              changed = true;
+            }
+          });
+
+          // 5. 组装最终结果
+          if (changed) {
+            let finalStr = '';
+            if (origObjRoot) {
+               // 如果是包在对象里的
+               const keys = ['tail', 'list', 'items', 'data'];
+               for (let k of keys) {
+                  if (Array.isArray(origObjRoot[k])) { origObjRoot[k] = origArr; break; }
+               }
+               finalStr = JSON.stringify(origObjRoot);
+            } else {
+               finalStr = JSON.stringify(origArr);
+            }
+
+            // 静默保存回原站，确保刷新后依然存在
+            try { originalSetItem.call(this, key, finalStr); } catch(e){}
+
+            return finalStr;
+          }
+        } catch (err) {
+          console.warn('[字卡系统] 融合静默报错:', err);
+        }
+        return value;
+      };
+    } catch (err) {
+      console.warn('[字卡系统] 拦截器安装失败:', err);
+    }
+  }
+
+  /* =====================================================================
+   * 11. 挂载与启动
+   * =================================================================== */
   function mount() {
     loadStore();
+    setupCardInterceptor(); // 安装拦截器
+
     document.body.appendChild(fab);
     document.body.appendChild(overlay);
     updateFabBadge();
@@ -1097,7 +1233,7 @@
   if (document.body) { mount(); } else { document.addEventListener('DOMContentLoaded', mount); }
 
   /* =====================================================================
-   * 10. 调试接口
+   * 12. 调试接口
    * =================================================================== */
   window.CardAudit = {
     open: openModal,
