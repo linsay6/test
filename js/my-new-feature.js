@@ -1,8 +1,9 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）自动字卡系统 - 完全体
+ * 赛博伴侣（梦角）自动字卡系统 - 最终精装修版
  * 
  * 存储键：localStorage['my-audit-cards']
+ * 数据结构：{ categories: { '主谓宾': [...] }, categoryOrder: [...], pending: [...] }
  * ========================================================================= */
 (function () {
   'use strict';
@@ -16,7 +17,8 @@
   const STORAGE_KEY   = 'my-audit-cards';
   const CHAT_MSGS_KEY = 'xy-home-v2:default:chat-msgs';
   const DEFAULT_CATS  = ['主谓宾', '标点', '量词', '形容词', '虚词', '未分类'];
-  const FALLBACK_CAT  = '未分类'; // 兜底分类（不可删除）
+  const FALLBACK_CAT  = '未分类';
+  const DEFAULT_USER  = '梦角'; // 统一发件人名称
 
   const TICK_MS       = 10 * 60 * 1000; 
   const GRAB_PROB     = 0.1;            
@@ -26,7 +28,7 @@
   const MAX_LEN       = 30;             
 
   /* =====================================================================
-   * 1. 工具函数
+   * 1. 基础工具函数
    * =================================================================== */
   function uid() {
     return 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
@@ -45,70 +47,24 @@
     return Array.from(String(s)).length;
   }
 
-  // 核心新增：容错获取对方昵称
-  function getPartnerName() {
-    let name = '';
-    // 1. 尝试从 DOM 中抓取
-    try {
-      const selectors = [
-        '.partner-name', '.nickname', '.chat-title', '.header-name', 
-        '.role-name', '.contact-name', '.title-name', '.chat-name'
-      ];
-      for (let sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && el.textContent && el.textContent.trim() && el.textContent.trim().length < 15) {
-          name = el.textContent.trim();
-          break;
-        }
-      }
-    } catch (e) {}
-
-    // 2. 尝试从 localStorage 抓取
-    if (!name) {
-      try {
-        const keys = [
-          'xy-home-v2:default:settings', 
-          'xy-home-v2:default:user', 
-          'xy-home-v2:default:config', 
-          'settings'
-        ];
-        for (let key of keys) {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const data = JSON.parse(raw);
-            if (data && typeof data === 'object') {
-              // 查找可能存在的属性
-              const possibleKeys = ['partnerName', 'nickname', 'name', 'partner', 'roleName'];
-              for (let pk of possibleKeys) {
-                if (data[pk] && typeof data[pk] === 'string') {
-                  name = data[pk].trim();
-                  break;
-                }
-              }
-              if (name) break;
-            }
-          }
-        }
-      } catch (e) {}
-    }
-
-    // 3. 兜底
-    return name || '梦角';
-  }
-
   /* =====================================================================
    * 2. 存储层
    * =================================================================== */
   function makeEmptyStore() {
     const categories = {};
     DEFAULT_CATS.forEach(function (c) { categories[c] = []; });
-    return { categories: categories, pending: [] };
+    return { 
+      categories: categories, 
+      categoryOrder: [...DEFAULT_CATS], // 初始化顺序
+      pending: [] 
+    };
   }
 
   function normalizeStore(raw) {
     const out = makeEmptyStore();
     if (!raw || typeof raw !== 'object') return out;
 
+    // 处理分类字典
     if (raw.categories && typeof raw.categories === 'object') {
       DEFAULT_CATS.forEach(function (c) {
         if (!Array.isArray(raw.categories[c])) raw.categories[c] = [];
@@ -119,10 +75,12 @@
         out.categories[name] = arr
           .filter(function (x) { return x && typeof x.text === 'string' && x.text.trim(); })
           .map(function (x) {
+            let u = typeof x.user === 'string' ? x.user : DEFAULT_USER;
+            if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER; // 强制修正旧数据
             return {
               id: typeof x.id === 'string' ? x.id : uid(),
               text: String(x.text),
-              user: typeof x.user === 'string' ? x.user : '我',
+              user: u,
               createdAt: typeof x.createdAt === 'number' ? x.createdAt : Date.now(),
               approvedAt: typeof x.approvedAt === 'number' ? x.approvedAt : Date.now()
             };
@@ -130,21 +88,35 @@
       });
     }
 
+    // 处理分类顺序 (拖拽排序支持)
+    if (Array.isArray(raw.categoryOrder)) {
+      out.categoryOrder = raw.categoryOrder.filter(c => out.categories[c]);
+      // 补充漏掉的分类
+      Object.keys(out.categories).forEach(c => {
+        if (!out.categoryOrder.includes(c)) out.categoryOrder.push(c);
+      });
+    } else {
+      out.categoryOrder = Object.keys(out.categories);
+    }
+
+    // 处理待审核
     if (Array.isArray(raw.pending)) {
       out.pending = raw.pending
         .filter(function (x) { return x && typeof x.text === 'string' && x.text.trim(); })
         .map(function (x) {
           let cat = typeof x.category === 'string' ? x.category : FALLBACK_CAT;
           if (!out.categories[cat]) cat = FALLBACK_CAT;
+          let u = typeof x.user === 'string' ? x.user : DEFAULT_USER;
+          if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER; // 强制修正旧数据
           return {
             id: typeof x.id === 'string' ? x.id : uid(),
             text: String(x.text),
-            user: typeof x.user === 'string' ? x.user : '我',
+            user: u,
             category: cat,
             createdAt: typeof x.createdAt === 'number' ? x.createdAt : Date.now()
           };
         })
-        .slice(0, MAX_PENDING); 
+        .slice(0, MAX_PENDING);
     }
     return out;
   }
@@ -155,7 +127,6 @@
       if (raw == null) return null;
       return normalizeStore(JSON.parse(raw));
     } catch (e) {
-      console.warn('[字卡系统] 读取失败：', e);
       return null;
     }
   }
@@ -163,9 +134,7 @@
   function writeStore(s) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-    } catch (e) {
-      console.warn('[字卡系统] 写入失败：', e);
-    }
+    } catch (e) {}
   }
 
   let store = makeEmptyStore();
@@ -322,11 +291,14 @@
     transition: border-color .16s ease, box-shadow .16s ease;
   }
   .ca-cat-row:hover { border-color: #d7e0f5; }
+  .ca-cat-row.dragging { opacity: 0.5; border: 1px dashed #2f6bff; }
+  .ca-cat-row.drag-over { border-top: 2px solid #2f6bff; }
   
   .ca-cat {
     width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 14px;
-    font-size: 13px; color: #3b4252; cursor: pointer; transition: background .16s ease;
+    font-size: 13px; color: #3b4252; cursor: grab; transition: background .16s ease;
   }
+  .ca-cat:active { cursor: grabbing; }
   .ca-cat:hover { background: #f5f9ff; }
   .ca-cat-arrow { width: 12px; flex: none; color: #9aa1b2; font-size: 11px; }
   .ca-cat-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -335,7 +307,6 @@
     font-size: 12px; color: #6b7280;
   }
   
-  /* 分类行上的操作按钮 */
   .ca-cat-ops {
     flex: none; display: flex; gap: 4px; margin-left: 8px; opacity: 0.3; transition: opacity .16s ease;
   }
@@ -350,16 +321,22 @@
   .ca-cat-row.is-active { border-color: #c7d7ff; box-shadow: 0 0 0 3px rgba(47, 107, 255, .08); }
   .ca-cat-row.is-active .ca-cat-name { color: #2f6bff; }
 
-  /* 展开的字卡面板 */
+  /* 展开的字卡面板与批量操作 */
   .ca-cards-box {
-    padding: 4px 14px 12px; border-top: 1px dashed #edf0f6;
-    display: flex; flex-direction: column; gap: 6px;
+    padding: 8px 14px 12px; border-top: 1px dashed #edf0f6;
+    display: flex; flex-direction: column; gap: 6px; background: #fbfcfe;
   }
-  .ca-cards-empty { padding: 10px 0; font-size: 12px; color: #a0a6b5; text-align: center; }
+  .ca-batch-header {
+    display: flex; align-items: center; gap: 8px; padding: 4px 0;
+    font-size: 12px; color: #6b7280; border-bottom: 1px dashed #e8ebf1; margin-bottom: 4px;
+  }
+  .ca-batch-header label { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  
   .ca-card {
     display: flex; align-items: center; gap: 10px; padding: 8px 10px;
-    border-radius: 8px; background: #fafbfd; border: 1px solid #f0f2f7;
+    border-radius: 8px; background: #fff; border: 1px solid #f0f2f7;
   }
+  .ca-card-cb { cursor: pointer; width: 14px; height: 14px; accent-color: #2f6bff; }
   .ca-card-txt { flex: 1; min-width: 0; font-size: 13px; color: #2b3140; word-break: break-word; }
   .ca-card-ops { flex: none; display: flex; gap: 6px; }
   
@@ -369,6 +346,16 @@
   }
   .ca-mini-btn:hover { background: #f0f5ff; border-color: #c7d7ff; color: #2f6bff; }
   .ca-mini-danger:hover { background: #fff1f1; border-color: #ffc9c9; color: #e5484d; }
+
+  .ca-batch-footer {
+    margin-top: 6px; padding-top: 10px; border-top: 1px dashed #e8ebf1; display: flex; justify-content: flex-end;
+  }
+  .ca-btn-danger {
+    padding: 7px 14px; border: none; border-radius: 8px; font-size: 12px;
+    font-weight: 600; font-family: inherit; color: #fff; cursor: pointer;
+    background: #ff4d4f; transition: background .16s ease;
+  }
+  .ca-btn-danger:hover { background: #ff1a1c; }
 
   /* 新建分类按钮 */
   .ca-add-cat-btn {
@@ -463,11 +450,12 @@
    * 5. 渲染逻辑
    * =================================================================== */
   let expandedCat = null;
+  let dragSrcCat = null; // 记录当前拖拽的分类名
 
   function refreshFormSelect() {
     const current = selectEl.value;
     selectEl.innerHTML = '';
-    Object.keys(store.categories).forEach(function (name) {
+    store.categoryOrder.forEach(function (name) {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
@@ -510,9 +498,10 @@
         const label = document.createElement('span');
         label.className = 'ca-cat-label';
         label.textContent = '归入分类：';
+        
         const sel = document.createElement('select');
         sel.className = 'ca-select-sm';
-        Object.keys(store.categories).forEach(function (name) {
+        store.categoryOrder.forEach(function (name) {
           const opt = document.createElement('option');
           opt.value = name;
           opt.textContent = name;
@@ -547,23 +536,65 @@
     badgeEl.textContent = String(store.pending.length);
   }
 
+  // 渲染分类列表与批量操作
   function renderCategories() {
     catsEl.innerHTML = '';
     let total = 0;
-    const names = Object.keys(store.categories);
 
-    names.forEach(function (name) {
+    // 按照保存的顺序进行渲染
+    store.categoryOrder.forEach(function (name) {
       const arr = store.categories[name];
+      if (!arr) return;
       total += arr.length;
 
       const row = document.createElement('div');
       row.className = 'ca-cat-row' + (expandedCat === name ? ' is-active' : '');
+      
+      // 拖拽支持
+      row.setAttribute('draggable', 'true');
+      
+      row.addEventListener('dragstart', function (e) {
+        dragSrcCat = name;
+        row.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      
+      row.addEventListener('dragend', function () {
+        row.classList.remove('dragging');
+        dragSrcCat = null;
+      });
+      
+      row.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        if (dragSrcCat && dragSrcCat !== name) {
+          row.classList.add('drag-over');
+        }
+      });
+      
+      row.addEventListener('dragleave', function () {
+        row.classList.remove('drag-over');
+      });
+      
+      row.addEventListener('drop', function (e) {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        if (dragSrcCat && dragSrcCat !== name) {
+          const fromIdx = store.categoryOrder.indexOf(dragSrcCat);
+          const toIdx = store.categoryOrder.indexOf(name);
+          if (fromIdx > -1 && toIdx > -1) {
+            // 交换顺序
+            store.categoryOrder.splice(fromIdx, 1);
+            store.categoryOrder.splice(toIdx, 0, dragSrcCat);
+            writeStore(store);
+            renderCategories(); // 重新渲染
+          }
+        }
+      });
 
       // 分类头部
       const catHeader = document.createElement('div');
       catHeader.className = 'ca-cat';
       catHeader.addEventListener('click', function (e) {
-        // 点击操作按钮时不触发展开
         if (e.target.closest('.ca-cat-ops')) return;
         expandedCat = (expandedCat === name) ? null : name;
         renderCategories();
@@ -585,7 +616,7 @@
       catHeader.appendChild(nameEl);
       catHeader.appendChild(countEl);
 
-      // 分类管理按钮 (重命名/删除)
+      // 操作按钮
       const ops = document.createElement('div');
       ops.className = 'ca-cat-ops';
       if (name !== FALLBACK_CAT) {
@@ -609,22 +640,48 @@
       catHeader.appendChild(ops);
       row.appendChild(catHeader);
 
-      // 展开字卡列表
+      // 展开列表
       if (expandedCat === name) {
         const box = document.createElement('div');
         box.className = 'ca-cards-box';
+
         if (arr.length === 0) {
           const empty = document.createElement('div');
           empty.className = 'ca-cards-empty';
           empty.textContent = '该分类暂无字卡';
           box.appendChild(empty);
         } else {
+          // 批量操作头部
+          const batchHeader = document.createElement('div');
+          batchHeader.className = 'ca-batch-header';
+          
+          const selectAllCb = document.createElement('input');
+          selectAllCb.type = 'checkbox';
+          selectAllCb.className = 'ca-card-cb';
+          selectAllCb.id = 'select-all-' + name;
+          
+          const selectAllLabel = document.createElement('label');
+          selectAllLabel.htmlFor = 'select-all-' + name;
+          selectAllLabel.appendChild(selectAllCb);
+          selectAllLabel.appendChild(document.createTextNode(' 全选'));
+          
+          batchHeader.appendChild(selectAllLabel);
+          box.appendChild(batchHeader);
+
+          // 字卡列表
           arr.forEach(function (card) {
             const wrap = document.createElement('div');
             wrap.className = 'ca-card';
+            
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'ca-card-cb ca-card-select';
+            cb.dataset.id = card.id;
+            
             const textEl = document.createElement('span');
             textEl.className = 'ca-card-txt';
             textEl.textContent = card.text;
+            
             const cardOps = document.createElement('div');
             cardOps.className = 'ca-card-ops';
 
@@ -642,11 +699,47 @@
 
             cardOps.appendChild(editBtn);
             cardOps.appendChild(delBtn);
+            
+            wrap.appendChild(cb);
             wrap.appendChild(textEl);
             wrap.appendChild(cardOps);
             box.appendChild(wrap);
           });
+
+          // 全选逻辑绑定
+          selectAllCb.addEventListener('change', function () {
+            const cbs = box.querySelectorAll('.ca-card-select');
+            cbs.forEach(c => c.checked = selectAllCb.checked);
+          });
+
+          // 批量删除底部
+          const batchFooter = document.createElement('div');
+          batchFooter.className = 'ca-batch-footer';
+          
+          const batchDelBtn = document.createElement('button');
+          batchDelBtn.type = 'button';
+          batchDelBtn.className = 'ca-btn-danger';
+          batchDelBtn.textContent = '批量删除';
+          
+          batchDelBtn.addEventListener('click', function () {
+            const cbs = box.querySelectorAll('.ca-card-select');
+            const selectedIds = [];
+            cbs.forEach(c => {
+              if (c.checked) selectedIds.push(c.dataset.id);
+            });
+            
+            if (selectedIds.length === 0) return;
+            if (!confirm('确定批量删除选中的 ' + selectedIds.length + ' 张字卡吗？')) return;
+            
+            store.categories[name] = store.categories[name].filter(c => !selectedIds.includes(c.id));
+            writeStore(store);
+            renderCategories();
+          });
+          
+          batchFooter.appendChild(batchDelBtn);
+          box.appendChild(batchFooter);
         }
+        
         row.appendChild(box);
       }
       catsEl.appendChild(row);
@@ -673,7 +766,7 @@
     if (!store.categories[cat]) cat = FALLBACK_CAT;
 
     store.pending.push({
-      id: uid(), text: text, user: '我', category: cat, createdAt: Date.now()
+      id: uid(), text: text, user: DEFAULT_USER, category: cat, createdAt: Date.now()
     });
     writeStore(store);
     inputEl.value = '';
@@ -706,7 +799,6 @@
     renderPending();
   }
 
-  // 字卡：编辑
   function editCard(catName, cardId) {
     const arr = store.categories[catName];
     if (!arr) return;
@@ -724,7 +816,6 @@
     renderCategories();
   }
 
-  // 字卡：删除
   function deleteCard(catName, cardId) {
     const arr = store.categories[catName];
     if (!arr) return;
@@ -737,7 +828,6 @@
     renderCategories();
   }
 
-  // 分类：新增
   function addCategory() {
     const name = prompt('请输入新分类名称：');
     if (!name) return;
@@ -746,11 +836,11 @@
     if (store.categories[trimmed]) { alert('该分类已存在！'); return; }
     
     store.categories[trimmed] = [];
+    store.categoryOrder.push(trimmed);
     writeStore(store);
     renderAll();
   }
 
-  // 分类：重命名
   function renameCategory(oldName) {
     if (oldName === FALLBACK_CAT) return;
     const newName = prompt('请输入新的分类名称：', oldName);
@@ -759,9 +849,13 @@
     if (!trimmed || trimmed === oldName) return;
     if (store.categories[trimmed]) { alert('该名称已存在！'); return; }
 
-    // 迁移数据
+    // 迁移数据与顺序
     store.categories[trimmed] = store.categories[oldName];
     delete store.categories[oldName];
+    
+    const orderIdx = store.categoryOrder.indexOf(oldName);
+    if (orderIdx > -1) store.categoryOrder[orderIdx] = trimmed;
+
     store.pending.forEach(function (item) {
       if (item.category === oldName) item.category = trimmed;
     });
@@ -771,7 +865,6 @@
     renderAll();
   }
 
-  // 分类：删除
   function deleteCategory(catName) {
     if (catName === FALLBACK_CAT) return;
     if (store.categories[catName].length > 0) {
@@ -781,6 +874,8 @@
     if (!confirm('确定要删除分类「' + catName + '」吗？')) return;
 
     delete store.categories[catName];
+    store.categoryOrder = store.categoryOrder.filter(c => c !== catName);
+    
     store.pending.forEach(function (item) {
       if (item.category === catName) item.category = FALLBACK_CAT;
     });
@@ -861,15 +956,13 @@
     if (candidates.length === 0) return 0;
     candidates.sort(function (a, b) { return a.ts - b.ts; });
 
-    const partnerName = getPartnerName(); // 获取真实昵称
     let added = 0;
-
     for (let i = 0; i < candidates.length; i++) {
       if (store.pending.length >= MAX_PENDING) break;
       store.pending.push({
         id: uid(),
         text: candidates[i].text,
-        user: partnerName, // 替换掉自动抓取
+        user: DEFAULT_USER,
         category: FALLBACK_CAT,
         createdAt: Date.now()
       });
@@ -966,7 +1059,6 @@
       }
       return added;
     },
-    getPartnerName: getPartnerName,
     getStore: function () { loadStore(); return JSON.parse(JSON.stringify(store)); }
   };
 })();
