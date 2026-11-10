@@ -1,35 +1,129 @@
 /* =========================================================================
  * my-new-feature.js
- * 功能：字卡库拆分与审核（界面原型）
- * 纯原生 JS + CSS，动态创建 DOM，无需修改 index.html
+ * 功能：字卡库拆分与审核（独立 localStorage 版）
+ *
+ * 存储键：localStorage['my-audit-cards']
+ * 数据结构：
+ * {
+ *   version: 1,
+ *   categories: {
+ *     "主谓宾": [ { id, text, user, createdAt, approvedAt } ],
+ *     "标点":   [ ... ]
+ *   },
+ *   pending: [ { id, text, user, category, createdAt } ]
+ * }
  * ========================================================================= */
 (function () {
   'use strict';
 
-  // 防止重复注入（脚本被多次引入时只执行一次）
+  // 防止脚本被重复引入导致 UI 重复注入
   if (window.__CARD_AUDIT_UI__) return;
   window.__CARD_AUDIT_UI__ = true;
 
   /* =======================================================================
-   * 1. 数据区（以后接后端时，把这些常量换成接口返回的数据即可）
+   * 0. 配置
    * ===================================================================== */
-  const PENDING_APPLICATIONS = [
-    { id: 'p1', user: 'MJ',   text: '你好',   cat: '主谓宾', time: '2 分钟前'  },
-    { id: 'p2', user: '小林', text: '，',     cat: '标点',   time: '15 分钟前' },
-    { id: 'p3', user: 'Ava',  text: '跑得快', cat: '主谓宾', time: '1 小时前'  },
-  ];
-
-  const CATEGORIES = [
-    { name: '主谓宾', count: 128 },
-    { name: '标点',   count: 46  },
-    { name: '量词',   count: 33  },
-    { name: '形容词', count: 72  },
-    { name: '虚词',   count: 18  },
-    { name: '未分类', count: 9   },
-  ];
+  const STORAGE_KEY = 'my-audit-cards';
+  const DEFAULT_CATS = ['主谓宾', '标点', '量词', '形容词', '虚词', '未分类'];
+  const FALLBACK_CAT = '未分类';
 
   /* =======================================================================
-   * 2. 样式（全部加了 ca- 前缀，避免和原页面样式冲突）
+   * 1. 工具函数
+   * ===================================================================== */
+  function uid() {
+    return 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  }
+
+  function fmtTime(ts) {
+    const d = new Date(ts);
+    const pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+           ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  /* =======================================================================
+   * 2. 存储层
+   * ===================================================================== */
+  function makeEmptyStore() {
+    const categories = {};
+    DEFAULT_CATS.forEach(function (c) { categories[c] = []; });
+    return { version: 1, categories: categories, pending: [] };
+  }
+
+  function normalizeStore(raw) {
+    if (!raw || typeof raw !== 'object') return makeEmptyStore();
+
+    const store = { version: 1, categories: {}, pending: [] };
+
+    // 分类
+    if (raw.categories && typeof raw.categories === 'object') {
+      Object.keys(raw.categories).forEach(function (name) {
+        const arr = raw.categories[name];
+        store.categories[name] = Array.isArray(arr)
+          ? arr.filter(function (x) { return x && typeof x.text === 'string'; })
+          : [];
+      });
+    }
+    // 补齐默认分类（避免旧数据缺分类）
+    DEFAULT_CATS.forEach(function (c) {
+      if (!store.categories[c]) store.categories[c] = [];
+    });
+
+    // 待审核
+    if (Array.isArray(raw.pending)) {
+      store.pending = raw.pending
+        .filter(function (x) { return x && typeof x.text === 'string'; })
+        .map(function (x) {
+          return {
+            id: typeof x.id === 'string' ? x.id : uid(),
+            text: x.text,
+            user: typeof x.user === 'string' ? x.user : '我',
+            category: store.categories[x.category] ? x.category : FALLBACK_CAT,
+            createdAt: typeof x.createdAt === 'number' ? x.createdAt : Date.now()
+          };
+        });
+    }
+
+    return store;
+  }
+
+  /** 读取存储；不存在或解析失败返回 null */
+  function readStore() {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY);
+      if (s == null) return null;
+      return normalizeStore(JSON.parse(s));
+    } catch (e) {
+      console.warn('[字卡审核] 读取 localStorage 失败：', e);
+      return null;
+    }
+  }
+
+  function writeStore(s) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    } catch (e) {
+      console.warn('[字卡审核] 写入 localStorage 失败：', e);
+    }
+  }
+
+  /** 当前内存中的库（初始为空壳，打开弹窗时加载） */
+  let store = makeEmptyStore();
+
+  /** 弹窗打开时调用：没有 my-audit-cards 就初始化空库 */
+  function ensureStore() {
+    const loaded = readStore();
+    if (loaded === null) {
+      store = makeEmptyStore();
+      writeStore(store);
+    } else {
+      store = loaded;
+    }
+    return store;
+  }
+
+  /* =======================================================================
+   * 3. 样式（全部 ca- 前缀，避免污染原站样式）
    * ===================================================================== */
   const CSS = `
   /* ---------- 右下角悬浮按钮 ---------- */
@@ -76,15 +170,12 @@
     visibility: hidden;
     transition: opacity .22s ease, visibility .22s ease;
   }
-  .ca-overlay.is-open {
-    opacity: 1;
-    visibility: visible;
-  }
+  .ca-overlay.is-open { opacity: 1; visibility: visible; }
 
   /* ---------- 弹窗面板 ---------- */
   .ca-modal {
-    width: min(680px, 100%);
-    max-height: min(84vh, 760px);
+    width: min(700px, 100%);
+    max-height: min(86vh, 780px);
     display: flex;
     flex-direction: column;
     background: #fff;
@@ -98,10 +189,7 @@
     opacity: 0;
     transition: transform .26s cubic-bezier(.2, .8, .3, 1), opacity .26s ease;
   }
-  .ca-overlay.is-open .ca-modal {
-    transform: none;
-    opacity: 1;
-  }
+  .ca-overlay.is-open .ca-modal { transform: none; opacity: 1; }
 
   /* ---------- 头部 ---------- */
   .ca-header {
@@ -152,10 +240,7 @@
     -webkit-overflow-scrolling: touch;
   }
   .ca-body::-webkit-scrollbar { width: 8px; }
-  .ca-body::-webkit-scrollbar-thumb {
-    background: #dfe3ec;
-    border-radius: 4px;
-  }
+  .ca-body::-webkit-scrollbar-thumb { background: #dfe3ec; border-radius: 4px; }
   .ca-body::-webkit-scrollbar-thumb:hover { background: #c9cfdc; }
 
   /* ---------- 区块 ---------- */
@@ -197,6 +282,62 @@
     color: #a0a6b5;
   }
 
+  /* ---------- 发起申请表单 ---------- */
+  .ca-form {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .ca-input {
+    flex: 1 1 200px;
+    min-width: 0;
+    padding: 9px 12px;
+    border: 1px solid #dfe3ec;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    color: #1f2430;
+    background: #fff;
+    outline: none;
+    transition: border-color .16s ease, box-shadow .16s ease;
+  }
+  .ca-input:focus {
+    border-color: #2f6bff;
+    box-shadow: 0 0 0 3px rgba(47, 107, 255, .15);
+  }
+  .ca-select {
+    flex: 0 0 auto;
+    padding: 9px 12px;
+    border: 1px solid #dfe3ec;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    color: #1f2430;
+    background: #fff;
+    outline: none;
+    cursor: pointer;
+    transition: border-color .16s ease, box-shadow .16s ease;
+  }
+  .ca-select:focus {
+    border-color: #2f6bff;
+    box-shadow: 0 0 0 3px rgba(47, 107, 255, .15);
+  }
+  .ca-btn-primary {
+    padding: 9px 18px;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    color: #fff;
+    cursor: pointer;
+    background: linear-gradient(135deg, #4f8cff, #2f6bff);
+    transition: filter .16s ease, transform .16s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ca-btn-primary:hover { filter: brightness(1.05); }
+  .ca-btn-primary:active { transform: scale(.97); }
+
   /* ---------- 待审核列表 ---------- */
   .ca-list {
     list-style: none;
@@ -214,26 +355,16 @@
     border: 1px solid #eceff5;
     border-radius: 12px;
     background: #fafbfd;
-    transition: background .18s ease, border-color .18s ease, opacity .18s ease;
+    transition: background .18s ease, border-color .18s ease;
   }
-  .ca-item:hover {
-    background: #f6f9ff;
-    border-color: #d7e0f5;
-  }
-  .ca-item.is-done {
-    opacity: .55;
-    background: #fafbfd;
-  }
+  .ca-item:hover { background: #f6f9ff; border-color: #d7e0f5; }
   .ca-item-main { flex: 1; min-width: 0; }
   .ca-item-title {
     font-size: 14px;
     line-height: 1.5;
     word-break: break-word;
   }
-  .ca-card-text {
-    color: #2f6bff;
-    font-weight: 600;
-  }
+  .ca-card-text { color: #2f6bff; font-weight: 600; }
   .ca-item-meta {
     margin-top: 4px;
     font-size: 12px;
@@ -244,8 +375,6 @@
     display: flex;
     gap: 8px;
   }
-
-  /* ---------- 按钮 ---------- */
   .ca-btn {
     padding: 7px 14px;
     border: 1px solid transparent;
@@ -257,10 +386,7 @@
     transition: background .16s ease, color .16s ease, border-color .16s ease;
     -webkit-tap-highlight-color: transparent;
   }
-  .ca-btn-ok {
-    background: #2f6bff;
-    color: #fff;
-  }
+  .ca-btn-ok { background: #2f6bff; color: #fff; }
   .ca-btn-ok:hover { background: #1f56e0; }
   .ca-btn-no {
     background: #fff;
@@ -273,16 +399,17 @@
     color: #e5484d;
   }
 
-  /* ---------- 处理后的状态标签 ---------- */
-  .ca-tag {
-    padding: 5px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
+  /* ---------- 空状态 ---------- */
+  .ca-empty {
+    padding: 22px 12px;
+    text-align: center;
+    font-size: 13px;
+    color: #a0a6b5;
+    border: 1px dashed #e2e7f0;
+    border-radius: 12px;
+    background: #fbfcfe;
+    list-style: none;
   }
-  .ca-tag-ok { background: #e8f7ee; color: #1a9c5b; }
-  .ca-tag-no { background: #fdecec; color: #e5484d; }
 
   /* ---------- 分类网格 ---------- */
   .ca-cats {
@@ -307,15 +434,17 @@
                 color .16s ease, box-shadow .16s ease;
     -webkit-tap-highlight-color: transparent;
   }
-  .ca-cat:hover {
-    background: #f5f9ff;
-    border-color: #c7d7ff;
-  }
+  .ca-cat:hover { background: #f5f9ff; border-color: #c7d7ff; }
   .ca-cat.is-active {
     background: #eef4ff;
     border-color: #2f6bff;
     color: #2f6bff;
     box-shadow: 0 0 0 3px rgba(47, 107, 255, .12);
+  }
+  .ca-cat-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ca-cat-count {
     font-size: 12px;
@@ -334,16 +463,10 @@
       font-size: 14px;
     }
     .ca-overlay { padding: 12px; }
-    .ca-modal {
-      max-height: 88vh;
-      border-radius: 14px;
-    }
+    .ca-modal { max-height: 88vh; border-radius: 14px; }
     .ca-header { padding: 16px 16px 12px; }
     .ca-body { padding: 14px 16px 18px; }
-    .ca-item {
-      flex-direction: column;
-      align-items: stretch;
-    }
+    .ca-item { flex-direction: column; align-items: stretch; }
     .ca-actions { justify-content: flex-end; }
   }
   `;
@@ -354,17 +477,14 @@
   document.head.appendChild(styleEl);
 
   /* =======================================================================
-   * 3. 创建 DOM 元素
+   * 4. 创建 DOM
    * ===================================================================== */
-
-  // ---- 右下角悬浮按钮 ----
   const fab = document.createElement('button');
   fab.type = 'button';
   fab.className = 'ca-fab';
   fab.textContent = '审核';
   fab.title = '字卡库拆分与审核';
 
-  // ---- 遮罩 + 弹窗骨架 ----
   const overlay = document.createElement('div');
   overlay.className = 'ca-overlay';
   overlay.innerHTML = `
@@ -372,11 +492,23 @@
       <div class="ca-header">
         <div>
           <h2 class="ca-title" id="ca-title">字卡库拆分与审核</h2>
-          <p class="ca-subtitle">拆分结果确认 · 分类归档</p>
+          <p class="ca-subtitle">独立字卡库 · 本地存储 my-audit-cards</p>
         </div>
         <button type="button" class="ca-close" aria-label="关闭">×</button>
       </div>
       <div class="ca-body">
+        <section class="ca-section">
+          <div class="ca-section-head">
+            <h3 class="ca-h3">发起申请</h3>
+            <span class="ca-hint">提交后进入待审核列表</span>
+          </div>
+          <div class="ca-form">
+            <input class="ca-input" type="text" placeholder="输入字卡内容，如：你好" maxlength="50" />
+            <select class="ca-select"></select>
+            <button type="button" class="ca-btn-primary">发起申请</button>
+          </div>
+        </section>
+
         <section class="ca-section">
           <div class="ca-section-head">
             <h3 class="ca-h3">待审核申请列表</h3>
@@ -384,10 +516,11 @@
           </div>
           <ul class="ca-list"></ul>
         </section>
+
         <section class="ca-section">
           <div class="ca-section-head">
             <h3 class="ca-h3">字卡库分类</h3>
-            <span class="ca-hint">点击可筛选</span>
+            <span class="ca-hint ca-total">共 0 张</span>
           </div>
           <div class="ca-cats"></div>
         </section>
@@ -395,20 +528,58 @@
     </div>
   `;
 
-  const closeBtn = overlay.querySelector('.ca-close');
-  const listEl   = overlay.querySelector('.ca-list');
-  const catsEl   = overlay.querySelector('.ca-cats');
-  const badgeEl  = overlay.querySelector('.ca-badge');
+  const closeBtn   = overlay.querySelector('.ca-close');
+  const inputEl    = overlay.querySelector('.ca-input');
+  const selectEl   = overlay.querySelector('.ca-select');
+  const submitBtn  = overlay.querySelector('.ca-btn-primary');
+  const listEl     = overlay.querySelector('.ca-list');
+  const badgeEl    = overlay.querySelector('.ca-badge');
+  const catsEl     = overlay.querySelector('.ca-cats');
+  const totalHintEl = overlay.querySelector('.ca-total');
 
-  /* ---------- 3.1 渲染待审核列表 ---------- */
-  const handled = new Set(); // 已处理的申请 id
+  /* =======================================================================
+   * 5. 渲染
+   * ===================================================================== */
 
-  PENDING_APPLICATIONS.forEach(function (item) {
+  /** 刷新分类下拉选项 */
+  function refreshSelect() {
+    const current = selectEl.value;
+    selectEl.innerHTML = '';
+    Object.keys(store.categories).forEach(function (name) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      selectEl.appendChild(opt);
+    });
+    if (current && store.categories[current]) {
+      selectEl.value = current;
+    }
+  }
+
+  /** 渲染待审核列表 */
+  function renderPending() {
+    listEl.innerHTML = '';
+
+    if (store.pending.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'ca-empty';
+      li.textContent = '暂无待审核申请，去上方发起一个吧～';
+      listEl.appendChild(li);
+    } else {
+      store.pending.forEach(function (item) {
+        listEl.appendChild(buildPendingItem(item));
+      });
+    }
+
+    badgeEl.textContent = String(store.pending.length);
+  }
+
+  /** 构建一条待审核项 */
+  function buildPendingItem(item) {
     const li = document.createElement('li');
     li.className = 'ca-item';
     li.dataset.id = item.id;
 
-    // 左：标题 + 元信息
     const main = document.createElement('div');
     main.className = 'ca-item-main';
 
@@ -423,12 +594,11 @@
 
     const meta = document.createElement('div');
     meta.className = 'ca-item-meta';
-    meta.textContent = '分类建议：' + item.cat + ' · ' + item.time;
+    meta.textContent = '分类建议：' + item.category + ' · ' + fmtTime(item.createdAt);
 
     main.appendChild(title);
     main.appendChild(meta);
 
-    // 右：操作按钮
     const actions = document.createElement('div');
     actions.className = 'ca-actions';
 
@@ -436,90 +606,140 @@
     okBtn.type = 'button';
     okBtn.className = 'ca-btn ca-btn-ok';
     okBtn.textContent = '同意';
+    okBtn.addEventListener('click', function () { approve(item.id); });
 
     const noBtn = document.createElement('button');
     noBtn.type = 'button';
     noBtn.className = 'ca-btn ca-btn-no';
     noBtn.textContent = '拒绝';
-
-    okBtn.addEventListener('click', function () {
-      handleDecision(item.id, 'approved', li, actions);
-    });
-    noBtn.addEventListener('click', function () {
-      handleDecision(item.id, 'rejected', li, actions);
-    });
+    noBtn.addEventListener('click', function () { reject(item.id); });
 
     actions.appendChild(okBtn);
     actions.appendChild(noBtn);
 
     li.appendChild(main);
     li.appendChild(actions);
-    listEl.appendChild(li);
-  });
-
-  /**
-   * 处理一条申请（同意 / 拒绝）
-   * 目前只做 UI 反馈，后续可在这里调用后端接口
-   */
-  function handleDecision(id, decision, li, actionsEl) {
-    if (handled.has(id)) return;
-    handled.add(id);
-
-    actionsEl.innerHTML = '';
-    const tag = document.createElement('span');
-    tag.className = 'ca-tag ' + (decision === 'approved' ? 'ca-tag-ok' : 'ca-tag-no');
-    tag.textContent = decision === 'approved' ? '已同意' : '已拒绝';
-    actionsEl.appendChild(tag);
-
-    li.classList.add('is-done');
-    updateBadge();
-
-    // TODO: 这里换成真实请求，例如
-    // fetch('/api/card-applications/' + id, { method: 'PATCH', body: ... })
+    return li;
   }
 
-  function updateBadge() {
-    const left = PENDING_APPLICATIONS.length - handled.size;
-    badgeEl.textContent = String(left);
-  }
+  /** 渲染字卡库分类（含数量） */
+  function renderCategories() {
+    catsEl.innerHTML = '';
 
-  /* ---------- 3.2 渲染字卡库分类 ---------- */
-  CATEGORIES.forEach(function (cat) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'ca-cat';
+    let total = 0;
+    Object.keys(store.categories).forEach(function (name) {
+      const count = store.categories[name].length;
+      total += count;
 
-    const nameEl = document.createElement('span');
-    nameEl.className = 'ca-cat-name';
-    nameEl.textContent = cat.name;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ca-cat';
 
-    const countEl = document.createElement('span');
-    countEl.className = 'ca-cat-count';
-    countEl.textContent = String(cat.count);
+      const nameEl = document.createElement('span');
+      nameEl.className = 'ca-cat-name';
+      nameEl.textContent = name;
 
-    btn.appendChild(nameEl);
-    btn.appendChild(countEl);
+      const countEl = document.createElement('span');
+      countEl.className = 'ca-cat-count';
+      countEl.textContent = String(count);
 
-    // 点击切换选中态（原型阶段仅做视觉反馈）
-    btn.addEventListener('click', function () {
-      btn.classList.toggle('is-active');
+      btn.appendChild(nameEl);
+      btn.appendChild(countEl);
+
+      // 仅做视觉高亮，原型阶段不参与过滤
+      btn.addEventListener('click', function () {
+        btn.classList.toggle('is-active');
+      });
+
+      catsEl.appendChild(btn);
     });
 
-    catsEl.appendChild(btn);
-  });
+    totalHintEl.textContent = '共 ' + total + ' 张';
+  }
 
-  updateBadge();
+  /** 全量渲染 */
+  function renderAll() {
+    refreshSelect();
+    renderPending();
+    renderCategories();
+  }
 
   /* =======================================================================
-   * 4. 打开 / 关闭逻辑
+   * 6. 业务操作
+   * ===================================================================== */
+
+  /** 发起申请：写入 pending */
+  function submitApplication() {
+    const text = (inputEl.value || '').trim();
+    if (!text) {
+      inputEl.focus();
+      return;
+    }
+
+    const category = selectEl.value || FALLBACK_CAT;
+
+    store.pending.push({
+      id: uid(),
+      text: text,
+      user: '我',
+      category: store.categories[category] ? category : FALLBACK_CAT,
+      createdAt: Date.now()
+    });
+
+    writeStore(store);
+    inputEl.value = '';
+    renderPending();
+    inputEl.focus();
+  }
+
+  /** 同意：从 pending 移除并真正写入对应分类 */
+  function approve(id) {
+    const idx = store.pending.findIndex(function (x) { return x.id === id; });
+    if (idx === -1) return;
+
+    const item = store.pending[idx];
+    store.pending.splice(idx, 1);
+
+    const cat = store.categories[item.category] ? item.category : FALLBACK_CAT;
+    if (!store.categories[cat]) store.categories[cat] = [];
+
+    store.categories[cat].push({
+      id: item.id,
+      text: item.text,
+      user: item.user,
+      createdAt: item.createdAt,
+      approvedAt: Date.now()
+    });
+
+    writeStore(store);
+
+    // 数量在分类网格中实时刷新
+    renderPending();
+    renderCategories();
+  }
+
+  /** 拒绝：仅从 pending 移除 */
+  function reject(id) {
+    const idx = store.pending.findIndex(function (x) { return x.id === id; });
+    if (idx === -1) return;
+
+    store.pending.splice(idx, 1);
+    writeStore(store);
+    renderPending();
+  }
+
+  /* =======================================================================
+   * 7. 打开 / 关闭
    * ===================================================================== */
   let prevBodyOverflow = '';
 
   function openModal() {
+    ensureStore();               // 没库就初始化空库
+    renderAll();                 // 用最新数据渲染
     prevBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden'; // 锁定背景滚动
+    document.body.style.overflow = 'hidden';
     overlay.classList.add('is-open');
-    closeBtn.focus();
+    setTimeout(function () { inputEl.focus(); }, 80);
   }
 
   function closeModal() {
@@ -531,20 +751,27 @@
   fab.addEventListener('click', openModal);
   closeBtn.addEventListener('click', closeModal);
 
-  // 点击遮罩空白处关闭（点击弹窗内部不关闭）
+  // 点遮罩空白处关闭
   overlay.addEventListener('click', function (e) {
     if (e.target === overlay) closeModal();
   });
 
   // ESC 关闭
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && overlay.classList.contains('is-open')) {
-      closeModal();
+    if (e.key === 'Escape' && overlay.classList.contains('is-open')) closeModal();
+  });
+
+  // 表单事件
+  submitBtn.addEventListener('click', submitApplication);
+  inputEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitApplication();
     }
   });
 
   /* =======================================================================
-   * 5. 挂载到页面
+   * 8. 挂载
    * ===================================================================== */
   function mount() {
     document.body.appendChild(fab);
@@ -557,9 +784,19 @@
     document.addEventListener('DOMContentLoaded', mount);
   }
 
-  // 方便在控制台调试 / 后续由其它逻辑触发
+  /* =======================================================================
+   * 9. 暴露调试接口（可选，方便控制台查看 / 重置）
+   * ===================================================================== */
   window.CardAudit = {
     open: openModal,
-    close: closeModal
+    close: closeModal,
+    getStore: function () {
+      return JSON.parse(JSON.stringify(store));
+    },
+    reset: function () {
+      store = makeEmptyStore();
+      writeStore(store);
+      renderAll();
+    }
   };
 })();
