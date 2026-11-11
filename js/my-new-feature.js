@@ -1,6 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 修复最终版
- * 修复：1. 隐藏机制只隐藏悬浮球，保留原生图标 2. 补全字卡库添加表单 3. 补全发送按钮
+ * my-new-feature.js 终极调试版
  * ========================================================================== */
 (function () {
   'use strict';
@@ -22,7 +21,6 @@
   var APP_ICON_EL = null, APP_ICON_IMG_EL = null, appIconInjectTimer = null;
   var OPEN_GROUPS = null;
 
-  /* --- 工具 --- */
   function safe(fn, name, def) { try { return fn(); } catch (err) { try { console.warn('[审计] ' + (name || 'task') + ' 出错：', err); } catch (e2) {} return def; } }
   function uid(prefix) { return (prefix || 'id') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
   function esc(str) { try { return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); } catch (e) { return ''; } }
@@ -34,15 +32,12 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
-  /* --- 数据层 --- */
   function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', hideAll: false, ballPos: null }; }
   function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0 } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
     if (!Array.isArray(d.groups)) d.groups = [];
-    // 如果没有分类，默认给一个空分类，方便用户直接添加
     if (d.groups.length === 0) d.groups.push({ id: uid('g'), name: '默认分组', disabledBy: [], cards: [] });
-    
     for (var gi = 0; gi < d.groups.length; gi++) {
       var g = d.groups[gi]; if (!g || typeof g !== 'object') { d.groups.splice(gi, 1); gi--; continue; }
       if (!g.id) g.id = uid('g'); if (typeof g.name !== 'string') g.name = '未命名'; if (!Array.isArray(g.disabledBy)) g.disabledBy = []; if (!Array.isArray(g.cards)) g.cards = [];
@@ -70,7 +65,6 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  /* --- 核心：无刷新注入 --- */
   function injectBubbleToChat(text) {
     try {
       var msgs = readChatMsgs(); msgs.push({ side: 'in', text: text, time: Date.now() }); writeChatMsgs(msgs);
@@ -95,7 +89,6 @@
     } catch (err) { console.warn('[审计] 注入气泡异常：', err); return false; }
   }
 
-  /* --- 引擎 --- */
   function autoPendingCount() { var n = 0; try { for (var i = 0; i < DB.pending.length; i++) { var p = DB.pending[i]; if (p.status === 'pending' && p.sender === SENDER_MJ && p.action === 'add') n++; } } catch (e) {} return n; }
   function pendingCount() { var n = 0; try { for (var i = 0; i < DB.pending.length; i++) if (DB.pending[i].status === 'pending') n++; } catch (e) {} return n; }
   function grabFromChat() {
@@ -148,7 +141,6 @@
   function tickEngine() { safe(function () { grabFromChat(); maybeMischief(); autoSendCard(); saveData(); updateBadge(); if (PANEL_OPEN && CURRENT_TAB === 'pending') renderPanelBody(); }, 'tickEngine'); }
   function startEngine() { safe(function () { var now = Date.now(); if (!DB.meta.lastGrabAt || (now - DB.meta.lastGrabAt) > ENGINE_INTERVAL) tickEngine(); else { maybeMischief(); saveData(); updateBadge(); } setInterval(function () { safe(tickEngine, 'tickEngine:interval'); }, ENGINE_INTERVAL); }, 'startEngine'); }
 
-  /* --- CSS 注入 --- */
   function injectCSS() {
     safe(function () {
       if (document.getElementById('ma-style')) return;
@@ -178,7 +170,6 @@
     }, 'injectCSS');
   }
 
-  /* --- UI 与 悬浮球 --- */
   function ensureRoot() { if (ROOT && document.body && document.body.contains(ROOT)) return ROOT; ROOT = document.createElement('div'); ROOT.id = 'ma-root'; (document.body || document.documentElement).appendChild(ROOT); return ROOT; }
   function toast(msg, ms) { safe(function () { ensureRoot(); var el = document.getElementById('ma-toast'); if (!el) { el = document.createElement('div'); el.id = 'ma-toast'; ROOT.appendChild(el); } el.textContent = String(msg == null ? '' : msg); el.classList.add('on'); clearTimeout(el.__maTimer); el.__maTimer = setTimeout(function () { el.classList.remove('on'); }, ms || 1800); }, 'toast'); }
   function buildFab() {
@@ -215,13 +206,7 @@
       var src = null; for (var i = 0; i < natives.length; i++) { if (natives[i].offsetParent !== null && natives[i].getBoundingClientRect().width > 0) { src = natives[i]; break; } }
       if (!src) src = natives[0];
       var clone = null; try { clone = src.cloneNode(true); } catch (e) { return false; } if (!clone) return false;
-      // 核心修复：保留并伪造原数据的 data-* 属性，尝试欺骗装修模式
-      try {
-        for (var ai = 0; ai < src.attributes.length; ai++) {
-          var attr = src.attributes[ai];
-          if (attr.name.indexOf('data-') === 0 && attr.name !== 'data-ma-clone') { clone.setAttribute(attr.name, attr.value + '_audit'); }
-        }
-      } catch (e) {}
+      try { for (var ai = 0; ai < src.attributes.length; ai++) { var attr = src.attributes[ai]; if (attr.name.indexOf('data-') === 0 && attr.name !== 'data-ma-clone') clone.setAttribute(attr.name, attr.value + '_audit'); } } catch (e) {}
       if (clone.id) clone.removeAttribute('id');
       var ids = clone.querySelectorAll ? clone.querySelectorAll('[id]') : []; for (var k = 0; k < ids.length; k++) { try { ids[k].removeAttribute('id'); } catch (e2) {} }
       clone.removeAttribute('style'); var styled = clone.querySelectorAll ? clone.querySelectorAll('[style]') : []; for (var si = 0; si < styled.length; si++) { try { styled[si].removeAttribute('style'); } catch (e3) {} }
@@ -244,13 +229,10 @@
   function startAppIconWatcher() { safe(function () { var tries = 0; if (appIconInjectTimer) clearInterval(appIconInjectTimer); if (injectAppIcon()) return; appIconInjectTimer = setInterval(function () { safe(function () { tries++; if (injectAppIcon() || tries >= 40) { clearInterval(appIconInjectTimer); appIconInjectTimer = null; } }, 'appIconWatcher:tick'); }, 800); }, 'startAppIconWatcher'); }
   function refreshAppIcon() { safe(function () { if (APP_ICON_EL && APP_ICON_EL.parentNode) { try { APP_ICON_EL.parentNode.removeChild(APP_ICON_EL); } catch (e) {} } APP_ICON_EL = null; APP_ICON_IMG_EL = null; injectAppIcon(); }, 'refreshAppIcon'); }
 
-  /* --- 关键修复：隐藏逻辑 --- */
   function applyVisibility() {
     safe(function () {
       var hide = !!(DB.settings.hideAll && !URL_FORCE_SHOW);
-      // 1. 悬浮球：根据设置决定是否隐藏
       if (FAB) { if (hide) FAB.classList.add('ma-hidden'); else FAB.classList.remove('ma-hidden'); }
-      // 2. 克隆的审核图标：【绝对不隐藏】，它是唯一唤醒入口！
       if (APP_ICON_EL) { APP_ICON_EL.classList.remove('ma-hidden'); }
       bindNativeHijack(hide);
     }, 'applyVisibility');
@@ -286,7 +268,6 @@
   }
   function updateBadge() { safe(function () { var n = pendingCount(); var f = FAB ? FAB.querySelector('.ma-fab-dot') : null; if (f) { if (n > 0) f.classList.add('on'); else f.classList.remove('on'); } var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; if (a) { if (n > 0) a.classList.add('on'); else a.classList.remove('on'); } var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } }, 'updateBadge'); }
 
-  /* --- 面板 UI --- */
   var TAB_DEF = [{ key: 'pending', label: '待审核' }, { key: 'cards', label: '字卡库' }, { key: 'history', label: '历史档案' }, { key: 'settings', label: '设置' }];
   function buildUI() {
     safe(function () {
@@ -315,7 +296,6 @@
     }, 'renderPanelBody');
   }
 
-  /* --- 审批执行 --- */
   function renderPendingTab() {
     var pending = []; for (var pi = 0; pi < DB.pending.length; pi++) if (DB.pending[pi].status === 'pending') pending.push(DB.pending[pi]);
     if (!pending.length) return '<div class="ma-empty">暂无待审核记录</div>';
@@ -367,13 +347,10 @@
     return h;
   }
 
-  /* --- 字卡库（核心修复：补全表单和发送） --- */
   function ensureOpenGroupsState() { if (OPEN_GROUPS === null) { OPEN_GROUPS = {}; for (var i = 0; i < DB.groups.length; i++) OPEN_GROUPS[DB.groups[i].id] = true; } }
   function renderCardsTab() {
     ensureOpenGroupsState();
     var h = '';
-    
-    // 1. 补全：手动提交审核表单
     h += '<div class="ma-set-block" style="background:#fafafa;">';
     h += '<div style="font-size:12px;color:#666;margin-bottom:8px;">手动输入要添加的字卡内容，提交后进入待审核（发件人：我）</div>';
     h += '<textarea class="ma-textarea" id="ma-manual-input" placeholder="输入字卡内容..."></textarea>';
@@ -384,15 +361,12 @@
     h += '<button class="ma-btn primary" id="ma-manual-submit" style="flex:1;">提交审核</button>';
     h += '</div></div>';
 
-    // 2. 批量操作栏
     h += '<div class="ma-bulkbar"><label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="ma-sel-all"> 全选</label><span id="ma-sel-count" style="color:#888;">已选 0 个</span><button class="ma-btn sm danger" id="ma-bulk-del">批量删除</button><select class="ma-select" id="ma-bulk-target" style="width:auto;flex:1;min-width:80px;"><option value="">转移目标…</option>';
     for (var gi = 0; gi < DB.groups.length; gi++) h += '<option value="' + esc(DB.groups[gi].id) + '">' + esc(DB.groups[gi].name) + '</option>';
     h += '</select><button class="ma-btn sm" id="ma-bulk-move">转移</button></div>';
 
-    // 3. 新建分类
     h += '<div class="ma-row"><input type="text" class="ma-input" id="ma-new-group-name" placeholder="新分类名称…" maxlength="20" style="flex:1;"><button class="ma-btn primary" id="ma-new-group">+ 新建分类</button></div>';
     
-    // 4. 分类列表渲染
     if (!DB.groups.length) return h + '<div class="ma-empty">暂无分类</div>';
     for (var i = 0; i < DB.groups.length; i++) {
       var g = DB.groups[i], gDis = (g.disabledBy || []).length > 0, isOpen = OPEN_GROUPS[g.id] !== false;
@@ -409,8 +383,6 @@
             var bTxt = cDisArr.length >= 2 ? '双方禁用' : (cDisArr.indexOf('user') >= 0 ? '单方禁用·我' : '单方禁用·梦角');
             h += '<div class="ma-card-meta"><span class="ma-badge-dis ' + bCls + '">' + bTxt + '</span></div>';
           } else if (gDis) h += '<div class="ma-card-meta"><span class="ma-badge-dis user" style="font-size:10px;">随分组禁用</span></div>';
-          
-          // 2. 补全：发送按钮
           h += '</div><div class="ma-card-ops">';
           h += '<button class="ma-btn sm" data-cact="send" data-cid="' + esc(c.id) + '" style="color:#2b6cff;border-color:#cce0ff;">发送</button>';
           h += '<button class="ma-btn sm" data-cact="edit" data-cid="' + esc(c.id) + '">编辑</button>';
@@ -425,18 +397,13 @@
 
   function bindCardsEvents(body) {
     safe(function () {
-      // 绑定手动提交
       var subBtn = body.querySelector('#ma-manual-submit'), manInput = body.querySelector('#ma-manual-input'), manGroup = body.querySelector('#ma-manual-group');
       if (subBtn && manInput) {
         subBtn.addEventListener('click', function () {
           safe(function () {
             var txt = String(manInput.value || '').trim();
             if (!txt) { toast('请输入内容'); return; }
-            DB.pending.push({
-              id: uid('p'), action: 'add', text: txt, cardId: '', fromGroupId: '', fromGroupName: '', 
-              toGroupId: manGroup ? manGroup.value : '', toGroupName: '', 
-              sender: SENDER_ME, auto: false, time: Date.now(), status: 'pending', note: '我手动提交的申请'
-            });
+            DB.pending.push({ id: uid('p'), action: 'add', text: txt, cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: manGroup ? manGroup.value : '', toGroupName: '', sender: SENDER_ME, auto: false, time: Date.now(), status: 'pending', note: '我手动提交的申请' });
             saveData(); toast('已提交审核'); manInput.value = ''; renderPanelBody(); updateBadge();
           }, 'manualSubmit');
         });
@@ -487,14 +454,12 @@
     }, 'sendCardToChat');
   }
 
-  /* --- 设置面板及裁剪 --- */
   function renderSettingsTab() {
     var s = DB.settings, h = '';
     h += '<div class="ma-set-block"><div class="ma-set-title">悬浮球外观</div><div class="ma-row"><span class="ma-label" style="width:52px;">颜色</span><input type="color" id="ma-set-color" value="' + esc(s.ballColor) + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.ballColor) + '</span></div>';
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">大小</span><input type="range" class="ma-range" id="ma-set-size" min="36" max="88" step="1" value="' + s.ballSize + '"><span class="ma-label" id="ma-set-size-val" style="width:44px;text-align:right;">' + s.ballSize + 'px</span></div>';
     h += '<div class="ma-row"><div class="ma-thumb" id="ma-set-ball-thumb" style="' + (s.ballImage ? 'background-image:url(&quot;' + s.ballImage + '&quot;);' : 'background:' + esc(s.ballColor) + ';') + '"></div><button class="ma-btn sm" id="ma-set-ball-upload">上传图片</button>' + (s.ballImage ? '<button class="ma-btn sm danger" id="ma-set-ball-clear">移除</button>' : '') + '</div></div>';
     h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div><div class="ma-row"><div class="ma-thumb square" id="ma-set-app-thumb" style="' + (s.appImage ? 'background-image:url(&quot;' + s.appImage + '&quot;);' : 'background:#f5f5f5;') + '"></div><button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>' + (s.appImage ? '<button class="ma-btn sm danger" id="ma-set-app-clear">移除</button>' : '') + '</div></div>';
-    // 核心修复：文案说明与逻辑说明
     h += '<div class="ma-set-block"><div class="ma-set-title">入口显示</div><div class="ma-row" style="justify-content:space-between;"><div><div style="font-size:13px;">隐藏悬浮球</div><div style="font-size:11px;color:#aaa;">开启后悬浮球消失，需点击原生“审核”图标进入面板关闭此开关</div></div><div class="ma-switch' + (s.hideAll ? ' on' : '') + '" id="ma-set-hide"></div></div></div>';
     h += '<div class="ma-set-block"><div class="ma-set-title">数据备份</div><div class="ma-row wrap"><button class="ma-btn" id="ma-export">导出备份</button><button class="ma-btn danger" id="ma-import">导入备份</button><input type="file" id="ma-import-file" accept=".json" style="display:none;"></div></div>';
     return h;
@@ -508,8 +473,6 @@
       var bc = body.querySelector('#ma-set-ball-clear'); if (bc) bc.addEventListener('click', function () { safe(function () { DB.settings.ballImage = ''; saveData(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'ballClr'); });
       var au = body.querySelector('#ma-set-app-upload'); if (au) au.addEventListener('click', function () { openCropper({ title: '裁剪图标', shape: 'square', onConfirm: function (d) { safe(function () { DB.settings.appImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'appImg'); } }); });
       var ac = body.querySelector('#ma-set-app-clear'); if (ac) ac.addEventListener('click', function () { safe(function () { DB.settings.appImage = ''; saveData(); refreshAppIcon(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'appClr'); });
-      
-      // 隐藏开关逻辑绑定
       var hd = body.querySelector('#ma-set-hide'); if (hd) hd.addEventListener('click', function () { safe(function () { DB.settings.hideAll = !DB.settings.hideAll; saveData(); hd.classList.toggle('on', DB.settings.hideAll); applyVisibility(); toast(DB.settings.hideAll ? '悬浮球已隐藏，可通过原生图标恢复' : '悬浮球已恢复'); }, 'hideSet'); });
       
       var exp = body.querySelector('#ma-export'); if (exp) exp.addEventListener('click', function () { safe(function () { var blob = new Blob([JSON.stringify({ __ma_backup: true, exportedAt: Date.now(), data: DB }, null, 2)], { type: 'application/json' }); var url = URL.createObjectURL(blob), a = document.createElement('a'), d = new Date(); a.href = url; a.download = 'audit-backup-' + d.getTime() + '.json'; document.body.appendChild(a); a.click(); setTimeout(function () { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e) {} }, 200); toast('已导出'); }, 'export'); });
@@ -560,21 +523,41 @@
     }, 'showCropUI');
   }
 
-  /* --- 启动与守护 --- */
   function parseUrlForceShow() { return safe(function () { var search = (window.location && window.location.search) || ''; if (!search) return false; if (typeof URLSearchParams !== 'undefined') { try { var v = new URLSearchParams(search).get('show_audit'); if (v === 'true' || v === '1') return true; } catch (e) {} } return /[?&]show_audit=(true|1)(?:&|$)/i.test(search); }, 'parseUrlForceShow', false); }
   function onReady(fn) { safe(function () { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { safe(fn, 'ready:cb'); }, { once: true }); else setTimeout(function () { safe(fn, 'ready:cb'); }, 0); }, 'onReady'); }
   function startGuard() { safe(function () { if (window.__maGuardTimer) return; window.__maGuardTimer = setInterval(function () { safe(function () { if (!document.body) return; if (!ROOT || !document.body.contains(ROOT)) { ROOT = null; FAB = null; MASK = null; PANEL = null; PANEL_OPEN = false; safe(buildFab, 'gFab'); safe(buildUI, 'gUI'); safe(applyAppearance, 'gApp'); safe(applyFabPosition, 'gPos'); safe(applyVisibility, 'gVis'); safe(updateBadge, 'gBadge'); } if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) { APP_ICON_EL = null; APP_ICON_IMG_EL = null; safe(injectAppIcon, 'gAppIcon'); safe(applyAppearance, 'gAppIconApp'); safe(applyVisibility, 'gAppIconVis'); safe(updateBadge, 'gAppIconBadge'); } }, 'guard'); }, 3000); }, 'startGuard'); }
+  
   function bootstrap() {
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; FAB.style.left = clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)) + 'px'; FAB.style.top = clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) + 'px'; }, 'resize'); }); }
     startAppIconWatcher(); startEngine(); startGuard();
     if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已强制唤醒'); }, 'forceTo'); }
     
-    // 挂载调试接口
+    // 终极调试接口
     try {
-      window.__MY_AUDIT__ = { tick: function() { if (window.__triggerTick) window.__triggerTick(); }, dump: function() { return DB; } };
-      window.__triggerTick = tickEngine;
-      console.log('[审计] 调试接口 __MY_AUDIT__ 已成功挂载');
+      window.__MY_AUDIT__ = { 
+        tick: function() { tickEngine(); }, 
+        dump: function() { return JSON.parse(JSON.stringify(DB)); },
+        reload: function() { DB = loadData(); if (PANEL_OPEN) renderPanelBody(); updateBadge(); toast('数据已重新加载'); },
+        injectTest: function() {
+          if (!DB || !DB.groups.length || !DB.groups[0].cards.length) { toast('请先创建至少一个分类和一张字卡'); return; }
+          var g1 = DB.groups[0];
+          var g2 = DB.groups[1] || g1;
+          var c1 = g1.cards[0];
+          var c2 = g1.cards[1] || c1;
+          var now = Date.now();
+          DB.pending.push({ id: 't1_'+now, action: 'delete', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, sender: '梦角', time: now, status: 'pending', note: '梦角的捣乱测试：想删除这张卡' });
+          DB.pending.push({ id: 't2_'+now, action: 'disable', text: c2.text, cardId: c2.id, fromGroupId: g1.id, fromGroupName: g1.name, sender: '梦角', time: now, status: 'pending', note: '梦角的捣乱测试：想禁用这张卡' });
+          if (DB.groups.length > 1) {
+            DB.pending.push({ id: 't3_'+now, action: 'move', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, toGroupId: g2.id, toGroupName: g2.name, sender: '梦角', time: now, status: 'pending', note: '梦角的整理测试：想迁移到[' + g2.name + ']' });
+          }
+          DB.pending.push({ id: 't4_'+now, action: 'enable', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, sender: '梦角', time: now, status: 'pending', note: '梦角的整理测试：想恢复启用' });
+          saveData();
+          if (PANEL_OPEN) { renderPanelBody(); updateBadge(); }
+          toast('测试数据已成功注入');
+        }
+      };
+      console.log('[审计] 调试接口已挂载！你可以执行 __MY_AUDIT__.injectTest() 来测试审批');
     } catch (e) {}
   }
 
