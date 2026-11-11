@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（外观隔离版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（完美对齐与圆角裁剪版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -18,7 +18,7 @@
   var FETCH_PROBABILITY = 0.9;
   var DEFAULT_CATEGORY = '未分类';
 
-  // 数据隔离：ball* 仅控制悬浮球，appIcon* 仅控制原生图标
+  // 数据隔离：ball* 控制悬浮球，app* 控制原生图标
   var DEFAULT_SETTINGS = {
     ballColor: '#6c8cff',
     ballSize: 56,
@@ -26,6 +26,7 @@
     position: null,
     isHidden: false,
     
+    appIconColor: '#f4f4f5',
     appIconImage: '',
     
     iconPage: 0,
@@ -132,7 +133,6 @@
     if (parsed.settings && typeof parsed.settings === 'object') {
       var s = parsed.settings;
       
-      // 兼容老版本字段，并迁移到新字段
       var ballColor = s.ballColor !== undefined ? s.ballColor : (s.color || DEFAULT_SETTINGS.ballColor);
       var ballSize = s.ballSize !== undefined ? s.ballSize : (s.size || DEFAULT_SETTINGS.ballSize);
       var ballImage = s.ballImage !== undefined ? s.ballImage : (s.image || '');
@@ -145,6 +145,7 @@
           ? { x: s.position.x, y: s.position.y } : null,
         isHidden: !!s.isHidden,
         
+        appIconColor: typeof s.appIconColor === 'string' ? s.appIconColor : DEFAULT_SETTINGS.appIconColor,
         appIconImage: typeof s.appIconImage === 'string' ? s.appIconImage : '',
         
         iconPage: typeof s.iconPage === 'number' ? s.iconPage : DEFAULT_SETTINGS.iconPage,
@@ -202,7 +203,7 @@
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
     'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;z-index:10;}',
 
-    /* 确保原生注入的元素沿用原网页的弹性布局，绝不强加尺寸 */
+    /* 彻底清理外挂样式，100%继承原生布局 */
     '.mac-injected-app .app-ico {',
     '  position: relative !important;',
     '  display: flex !important;',
@@ -310,7 +311,8 @@
     '.mac-modal-body{font-size:13px;color:#4a5163;line-height:1.6;}',
     '.mac-modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;}',
     '.mac-crop-stage{display:flex;align-items:center;justify-content:center;margin-bottom:12px;}',
-    '.mac-crop-canvas{border-radius:50%;touch-action:none;cursor:grab;background:#f2f4f8;max-width:100%;}',
+    /* 圆角矩形预览 */
+    '.mac-crop-canvas{border-radius:22%;touch-action:none;cursor:grab;background:#f2f4f8;max-width:100%;}',
     '.mac-crop-zoom{width:100%;accent-color:#6c8cff;}',
 
     '.mac-toast{position:fixed;left:50%;bottom:64px;transform:translate(-50%,20px);background:rgba(30,36,52,.92);',
@@ -396,7 +398,7 @@
   }
 
   /* =======================================================================
-   * 5. 图片裁剪
+   * 5. 图片裁剪（圆角矩形）
    * ===================================================================== */
   function openCropModal(dataUrl, cb) {
     var V = 280;
@@ -435,11 +437,25 @@
     };
     img.src = dataUrl;
 
+    // 圆角矩形绘制工具
+    function drawRoundedRect(c, x, y, width, height, radius) {
+      c.beginPath();
+      c.moveTo(x + radius, y);
+      c.lineTo(x + width - radius, y);
+      c.quadraticCurveTo(x + width, y, x + width, y + radius);
+      c.lineTo(x + width, y + height - radius);
+      c.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      c.lineTo(x + radius, y + height);
+      c.quadraticCurveTo(x, y + height, x, y + height - radius);
+      c.lineTo(x, y + radius);
+      c.quadraticCurveTo(x, y, x + radius, y);
+      c.closePath();
+    }
+
     function draw() {
       ctx.clearRect(0, 0, V, V);
       ctx.save();
-      ctx.beginPath();
-      ctx.arc(V / 2, V / 2, V / 2 - 1, 0, Math.PI * 2);
+      drawRoundedRect(ctx, 1, 1, V - 2, V - 2, V * 0.22);
       ctx.clip();
       ctx.fillStyle = '#f2f4f8';
       ctx.fillRect(0, 0, V, V);
@@ -450,8 +466,8 @@
         ctx.drawImage(img, V / 2 + ox - w / 2, V / 2 + oy - h / 2, w, h);
       }
       ctx.restore();
-      ctx.beginPath();
-      ctx.arc(V / 2, V / 2, V / 2 - 1, 0, Math.PI * 2);
+      
+      drawRoundedRect(ctx, 1, 1, V - 2, V - 2, V * 0.22);
       ctx.strokeStyle = 'rgba(0,0,0,.18)';
       ctx.lineWidth = 2;
       ctx.stroke();
@@ -501,8 +517,7 @@
       var octx = out.getContext('2d');
       octx.clearRect(0, 0, OUT, OUT);
       octx.save();
-      octx.beginPath();
-      octx.arc(OUT / 2, OUT / 2, OUT / 2, 0, Math.PI * 2);
+      drawRoundedRect(octx, 0, 0, OUT, OUT, OUT * 0.22);
       octx.clip();
       var k = OUT / V;
       var s = baseScale * zoom;
@@ -613,16 +628,22 @@
     
     var s = Store.data.settings;
     
-    // 彻底移除所有尺寸控制，让原生网页的 .app-ico 决定大小
     if (s.appIconImage) {
       ico.style.backgroundImage = 'url("' + s.appIconImage + '")';
       ico.style.backgroundColor = 'transparent';
       text.style.opacity = '0';
     } else {
       ico.style.backgroundImage = 'none';
-      ico.style.backgroundColor = '#f2f4f8'; // 默认底色让黑字看得清
+      ico.style.backgroundColor = s.appIconColor;
       text.style.opacity = '1';
-      text.style.color = '#1f2430';
+      // 动态判断背景颜色明暗，自动调整文字颜色
+      var hex = s.appIconColor.replace('#', '');
+      if (hex.length === 3) hex = hex.split('').map(function(c) { return c+c; }).join('');
+      var r = parseInt(hex.substr(0, 2), 16) || 0;
+      var g = parseInt(hex.substr(2, 2), 16) || 0;
+      var b = parseInt(hex.substr(4, 2), 16) || 0;
+      var luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      text.style.color = luma > 140 ? '#1f2430' : '#ffffff';
     }
   }
 
@@ -688,7 +709,6 @@
   function applyEntryUI() {
     var s = Store.data.settings;
     
-    // 悬浮球 UI 控制
     if (ball) {
       var shouldShowBall = !s.isHidden || isForceShow;
       ball.style.display = shouldShowBall ? 'flex' : 'none';
@@ -867,7 +887,8 @@
 
             '<div class="mac-section">' +
               '<div class="mac-section-title">九宫格图标外观</div>' +
-              '<div style="font-size:12px;color:#9aa1b2;margin-bottom:10px;">图标尺寸自动继承原网页排版，无需调整。</div>' +
+              '<div style="font-size:12px;color:#9aa1b2;margin-bottom:10px;">尺寸自动继承原网页，若上传图片将覆盖背景色。</div>' +
+              '<div class="mac-field"><span>背景颜色</span><input type="color" data-role="set-app-color"></div>' +
               '<div class="mac-row">' +
                 '<button class="mac-btn" data-act="upload-app-img">上传图标图片</button>' +
                 '<button class="mac-btn" data-act="clear-app-img">清除图片</button>' +
@@ -1065,6 +1086,8 @@
     var ballSize = panelRoot.querySelector('[data-role="set-ball-size"]');
     var ballSizeVal = panelRoot.querySelector('[data-role="ball-size-val"]');
     var hidden = panelRoot.querySelector('[data-role="set-hidden"]');
+    
+    var appColor = panelRoot.querySelector('[data-role="set-app-color"]');
     var iconPage = panelRoot.querySelector('[data-role="set-icon-page"]');
     var iconIndex = panelRoot.querySelector('[data-role="set-icon-index"]');
     
@@ -1072,6 +1095,8 @@
     if (ballSize) ballSize.value = s.ballSize;
     if (ballSizeVal) ballSizeVal.textContent = s.ballSize;
     if (hidden) hidden.checked = !!s.isHidden;
+    
+    if (appColor) appColor.value = normalizeHex(s.appIconColor);
     if (iconPage) iconPage.value = s.iconPage;
     
     if (iconIndex) {
@@ -1181,8 +1206,16 @@
         t.value = '';
         return;
       }
+      
+      // 颜色变化事件
       if (t.matches('[data-role="set-ball-color"]')) {
         Store.data.settings.ballColor = t.value;
+        Store.save();
+        applyEntryUI();
+        return;
+      }
+      if (t.matches('[data-role="set-app-color"]')) {
+        Store.data.settings.appIconColor = t.value;
         Store.save();
         applyEntryUI();
         return;
@@ -1201,6 +1234,12 @@
       }
       if (t.matches('[data-role="set-ball-color"]')) {
         Store.data.settings.ballColor = t.value;
+        Store.save();
+        applyEntryUI();
+        return;
+      }
+      if (t.matches('[data-role="set-app-color"]')) {
+        Store.data.settings.appIconColor = t.value;
         Store.save();
         applyEntryUI();
         return;
