@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（最终完美版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 双人共同管理版
  * ========================================================================= */
 (function () {
   'use strict';
@@ -69,12 +69,16 @@
     if (!item) return null;
     if (typeof item === 'string') {
       var t = item.trim();
-      return t ? { id: uid(), text: t } : null;
+      return t ? { id: uid(), text: t, isDisabled: false } : null;
     }
     if (typeof item === 'object') {
       var text = String(item.text != null ? item.text : (item.content || '')).trim();
       if (!text) return null;
-      return { id: String(item.id || uid()), text: text };
+      return { 
+        id: String(item.id || uid()), 
+        text: text,
+        isDisabled: !!item.isDisabled
+      };
     }
     return null;
   }
@@ -82,15 +86,20 @@
   function normalizePending(item) {
     if (typeof item === 'string') {
       var t0 = item.trim();
-      return t0 ? { id: uid(), text: t0, category: DEFAULT_CATEGORY, sender: '我' } : null;
+      return t0 ? { id: uid(), action: 'add', text: t0, category: DEFAULT_CATEGORY, targetCategory: '', sender: '我' } : null;
     }
     if (!item || typeof item !== 'object') return null;
     var text = String(item.text || '').trim();
     if (!text) return null;
+    
+    var action = ['add', 'delete', 'disable', 'move'].indexOf(item.action) !== -1 ? item.action : 'add';
+    
     return {
       id: String(item.id || uid()),
+      action: action,
       text: text,
       category: String(item.category || DEFAULT_CATEGORY),
+      targetCategory: String(item.targetCategory || ''),
       sender: item.sender === '梦角' ? '梦角' : '我'
     };
   }
@@ -272,6 +281,11 @@
     '.mac-sender{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;}',
     '.mac-sender-meng{background:#eef0ff;color:#5a6bd8;}',
     '.mac-sender-me{background:#e9f7ef;color:#1f9d55;}',
+    '.mac-action-tag{font-size:11px;padding:2px 6px;border-radius:4px;font-weight:700;}',
+    '.mac-act-add{background:#e8f5e9;color:#2e7d32;}',
+    '.mac-act-del{background:#ffebee;color:#c62828;}',
+    '.mac-act-dis{background:#fff3e0;color:#ef6c00;}',
+    '.mac-act-mov{background:#e3f2fd;color:#1565c0;}',
 
     '.mac-cat-list{margin-top:12px;display:flex;flex-direction:column;gap:10px;}',
     '.mac-cat{border:1px solid #eef0f5;border-radius:12px;overflow:hidden;background:#fff;}',
@@ -287,6 +301,7 @@
     '.mac-card{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:#fbfcfe;}',
     '.mac-card:hover{background:#f4f6fb;}',
     '.mac-card-text{flex:1 1 auto;font-size:13px;line-height:1.5;word-break:break-word;color:#2b3142;}',
+    '.mac-card-disabled { color: #9aa1b2 !important; text-decoration: line-through !important; opacity: 0.7; }',
 
     '.mac-section{border:1px solid #eef0f5;border-radius:12px;padding:12px 14px;margin-bottom:12px;}',
     '.mac-section-title{font-size:13px;font-weight:700;color:#3a4152;margin-bottom:10px;}',
@@ -710,7 +725,6 @@
       var pageIdx = Math.min(Math.max(s.iconPage || 0, 0), slides.length - 1);
       var targetContainer = slides[pageIdx];
       
-      // 找目标容器里的网格
       var targetGrid = null;
       if (targetContainer.classList.contains('app-grid') || targetContainer.classList.contains('p3-grid')) {
         targetGrid = targetContainer;
@@ -718,7 +732,6 @@
         targetGrid = targetContainer.querySelector('.app-grid') || targetContainer.querySelector('[class*="grid"]');
       }
       
-      // 如果没找到，尝试找有多个 .app 子元素的父容器
       if (!targetGrid) {
         var apps = targetContainer.querySelectorAll('.app');
         if (apps.length > 0) {
@@ -842,7 +855,7 @@
   }
 
   /* =======================================================================
-   * 7. 自动抓取（带日志与拟人化）
+   * 7. 自动抓取与 AI 自主意识
    * ===================================================================== */
   function pickTimestamp(m) {
     var keys = ['time', 'timestamp', 'ts', 'createdAt', 'created_at', 'date', 'sendTime'];
@@ -872,9 +885,74 @@
     return '';
   }
 
+  function tryAIExtracurricular() {
+    // 2% 概率触发自主意识
+    if (Math.random() > 0.02) return;
+    
+    var d = Store.data;
+    if (d.pending.length >= MAX_PENDING) return;
+
+    // 收集所有字卡及所在分类
+    var allCards = [];
+    d.categoryOrder.forEach(function(cat) {
+      (d.categories[cat] || []).forEach(function(card) {
+        if (!card.isDisabled) { // 只对正常的卡进行操作
+          allCards.push({ cat: cat, card: card });
+        }
+      });
+    });
+
+    if (allCards.length === 0) return;
+
+    var target = allCards[Math.floor(Math.random() * allCards.length)];
+    
+    // 随机行为：删除(35%), 禁用(35%), 迁移(30%)
+    var roll = Math.random();
+    var action = 'delete';
+    var targetCategory = '';
+
+    if (roll < 0.35) {
+      action = 'delete';
+    } else if (roll < 0.7) {
+      action = 'disable';
+    } else {
+      action = 'move';
+      // 找其他分类
+      var otherCats = d.categoryOrder.filter(function(n) { return n !== target.cat; });
+      if (otherCats.length === 0) {
+        action = 'disable'; // 没有其他分类，退化为禁用
+      } else {
+        targetCategory = otherCats[Math.floor(Math.random() * otherCats.length)];
+      }
+    }
+
+    // 检查是否已经有同样的申请在pending里
+    var exists = d.pending.some(function(p) {
+      return p.text === target.card.text && p.category === target.cat && p.action === action;
+    });
+
+    if (!exists) {
+      d.pending.push({
+        id: uid(),
+        action: action,
+        text: target.card.text,
+        category: target.cat,
+        targetCategory: targetCategory,
+        sender: '梦角'
+      });
+      Store.save();
+      hideBadge = false;
+      refreshUI();
+      console.log('[梦角字卡] AI 自主意识触发:', action, target.card.text);
+    }
+  }
+
   function autoFetch(isManual) {
     if (isManual) {
       console.log('[梦角字卡] 💡 收到手动触发指令，无视概率强制开始抓取...');
+    } else {
+      // 在正常的抓取前，先摇骰子看看 AI 要不要捣乱
+      tryAIExtracurricular();
     }
 
     var raw = null;
@@ -901,7 +979,6 @@
       return;
     }
 
-    // 拟人化概率
     var hasLoveWord = msgs.some(function(m) {
       var txt = pickText(m);
       return /喜欢|爱|想你|开心|抱抱|亲亲/.test(txt);
@@ -917,7 +994,7 @@
     if (isManual) console.log('[梦角字卡] 🚀 开始扫描 ' + msgs.length + ' 条消息...');
 
     var now = Date.now();
-    var WINDOW = 15 * 60 * 1000; // 15 分钟
+    var WINDOW = 15 * 60 * 1000;
 
     var known = Object.create(null);
     d.pending.forEach(function (p) { known[p.text] = 1; });
@@ -939,51 +1016,32 @@
       var m = msgs[i];
       if (!m || typeof m !== 'object') continue;
 
-      if (m.side !== 'out') {
-        if (isManual) console.log('  [跳过] 不是 out 方向 (句:', pickText(m).slice(0,10) + '...)');
-        continue;
-      }
+      if (m.side !== 'out') continue;
 
       var ts = pickTimestamp(m);
       if (hasAnyTimestamp) {
-        if (ts === null) {
-          if (isManual) console.log('  [跳过] 无有效时间戳');
-          continue;
-        }
-        if (now - ts > WINDOW) {
-          if (isManual) console.log('  [跳过] 超过 15 分钟', pickText(m));
-          continue;
-        }
-        if (ts - now > 60 * 1000) {
-          if (isManual) console.log('  [跳过] 未来时间', pickText(m));
-          continue;
-        }
+        if (ts === null) continue;
+        if (now - ts > WINDOW) continue;
+        if (ts - now > 60 * 1000) continue;
       } else {
-        if (i < msgs.length - 20) {
-          if (isManual) console.log('  [跳过] 无时间戳，仅在末尾20条中查找');
-          continue;
-        }
+        if (i < msgs.length - 20) continue;
       }
 
       var text = pickText(m);
       if (!text) continue;
 
       var len = Array.from(text).length;
-      if (len < 5 || len > 35) {
-        if (isManual) console.log('  [跳过] 字数不在范围 (', len, '字):', text);
-        continue;
-      }
+      if (len < 5 || len > 35) continue;
 
-      if (known[text]) {
-        if (isManual) console.log('  [跳过] 已存在:', text);
-        continue;
-      }
+      if (known[text]) continue;
       known[text] = 1;
 
       d.pending.push({
         id: uid(),
+        action: 'add',
         text: text,
         category: d.categoryOrder[0] || DEFAULT_CATEGORY,
+        targetCategory: '',
         sender: '梦角'
       });
       added++;
@@ -995,7 +1053,6 @@
       hideBadge = false;
       refreshUI();
       toast('已静默收录 ' + added + ' 条字卡');
-      if (isManual) console.log('[梦角字卡] 🎉 抓取完成，共收录 ' + added + ' 条');
     } else {
       if (isManual) console.log('[梦角字卡] 扫描结束，没有符合条件的新消息。');
     }
@@ -1160,28 +1217,62 @@
     var list = panelRoot.querySelector('[data-role="pending-list"]');
     var pending = Store.data.pending;
     if (!pending.length) {
-      list.innerHTML = '<div class="mac-empty">暂无待审核字卡</div>';
+      list.innerHTML = '<div class="mac-empty">暂无待审核事项</div>';
       return;
     }
     var cats = Store.data.categoryOrder;
+    
     list.innerHTML = pending.map(function (p) {
       var isMeng = p.sender === '梦角';
-      var options = cats.map(function (n) {
-        return '<option value="' + escAttr(n) + '"' + (n === p.category ? ' selected' : '') + '>' +
-          esc(n) + '</option>';
-      }).join('');
+      var senderText = isMeng ? '梦角' : '我';
+      var senderClass = isMeng ? 'mac-sender-meng' : 'mac-sender-me';
+      
+      var actText = '';
+      var actClass = '';
+      var uiExtra = '';
+
+      if (p.action === 'add') {
+        actText = '申请新增';
+        actClass = 'mac-act-add';
+        var options = cats.map(function (n) {
+          return '<option value="' + escAttr(n) + '"' + (n === p.category ? ' selected' : '') + '>' +
+            esc(n) + '</option>';
+        }).join('');
+        uiExtra = '<select class="mac-select mac-select-sm" data-role="pending-cat" data-id="' + escAttr(p.id) + '">' + options + '</select>';
+      } else if (p.action === 'delete') {
+        actText = '申请删除';
+        actClass = 'mac-act-del';
+      } else if (p.action === 'disable') {
+        actText = '申请禁用';
+        actClass = 'mac-act-dis';
+      } else if (p.action === 'move') {
+        actText = '申请迁移';
+        actClass = 'mac-act-mov';
+        var moveOpts = cats.filter(function(n) { return n !== p.category; }).map(function (n) {
+          return '<option value="' + escAttr(n) + '"' + (n === p.targetCategory ? ' selected' : '') + '>' + esc(n) + '</option>';
+        }).join('');
+        uiExtra = '<span style="font-size:12px;color:#666;">从【' + esc(p.category) + '】移至</span>' +
+                  '<select class="mac-select mac-select-sm" data-role="pending-target-cat" data-id="' + escAttr(p.id) + '">' + moveOpts + '</select>';
+      }
+
+      var textDisplay = '';
+      if (p.action === 'add') {
+        textDisplay = '「' + esc(p.text) + '」';
+      } else {
+        textDisplay = '「' + esc(p.text) + '」';
+      }
+
       return '' +
         '<div class="mac-pending-item" data-id="' + escAttr(p.id) + '">' +
-          '<div class="mac-pending-text">' + esc(p.text) + '</div>' +
+          '<div class="mac-pending-text">' +
+            '<span class="mac-action-tag ' + actClass + '">' + actText + '</span> ' +
+            '<span class="mac-sender ' + senderClass + '">' + senderText + '</span> ' +
+            textDisplay +
+          '</div>' +
           '<div class="mac-pending-meta">' +
-            '<span class="mac-sender ' + (isMeng ? 'mac-sender-meng' : 'mac-sender-me') + '">' +
-              (isMeng ? '梦角' : '我') + '</span>' +
-            '<select class="mac-select mac-select-sm" data-role="pending-cat" data-id="' +
-              escAttr(p.id) + '">' + options + '</select>' +
-            '<button class="mac-mini mac-mini-primary" data-act="approve" data-id="' +
-              escAttr(p.id) + '">通过</button>' +
-            '<button class="mac-mini mac-mini-danger" data-act="reject" data-id="' +
-              escAttr(p.id) + '">删除</button>' +
+            uiExtra +
+            '<button class="mac-mini mac-mini-primary" data-act="approve" data-id="' + escAttr(p.id) + '">同意</button>' +
+            '<button class="mac-mini mac-mini-danger" data-act="reject" data-id="' + escAttr(p.id) + '">驳回</button>' +
           '</div>' +
         '</div>';
     }).join('');
@@ -1198,10 +1289,15 @@
       : '<option value="">无其他分类</option>';
 
     var items = cards.map(function (c) {
+      var disabledClass = c.isDisabled ? ' mac-card-disabled' : '';
+      var recoverBtn = c.isDisabled ? 
+        '<button class="mac-mini mac-mini-primary" data-act="card-recover" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '">恢复</button>' : '';
+
       return '' +
         '<div class="mac-card" data-id="' + escAttr(c.id) + '">' +
           '<input type="checkbox" class="mac-card-check" data-id="' + escAttr(c.id) + '">' +
-          '<span class="mac-card-text">' + esc(c.text) + '</span>' +
+          '<span class="mac-card-text' + disabledClass + '">' + esc(c.text) + '</span>' +
+          recoverBtn +
           '<button class="mac-mini" data-act="card-edit" data-cat="' + escAttr(name) +
             '" data-id="' + escAttr(c.id) + '">编辑</button>' +
           '<button class="mac-mini mac-mini-danger" data-act="card-del" data-cat="' + escAttr(name) +
@@ -1347,6 +1443,15 @@
         if (item) { item.category = t.value; Store.save(); }
         return;
       }
+      if (t.matches('[data-role="pending-target-cat"]')) {
+        var id = t.dataset.id;
+        var item = null;
+        for (var k = 0; k < Store.data.pending.length; k++) {
+          if (Store.data.pending[k].id === id) { item = Store.data.pending[k]; break; }
+        }
+        if (item) { item.targetCategory = t.value; Store.save(); }
+        return;
+      }
       if (t.matches('[data-role="set-hidden"]')) {
         Store.data.settings.isHidden = !!t.checked;
         Store.save();
@@ -1479,7 +1584,7 @@
       d.categories[name] = [];
       d.categoryOrder.push(name);
     }
-    d.categories[name].push({ id: uid(), text: text });
+    d.categories[name].push({ id: uid(), text: text, isDisabled: false });
   }
 
   function getCheckedIds(catName) {
@@ -1498,7 +1603,7 @@
     var cards = d.categories[name] || [];
     if (target && d.categories[target]) {
       cards.forEach(function (c) {
-        d.categories[target].push({ id: c.id || uid(), text: c.text });
+        d.categories[target].push({ id: c.id || uid(), text: c.text, isDisabled: c.isDisabled });
       });
     }
     delete d.categories[name];
@@ -1524,7 +1629,7 @@
         var catSel = panelRoot.querySelector('[data-role="manual-cat"]');
         var cat = (catSel && catSel.value) || d.categoryOrder[0] || DEFAULT_CATEGORY;
 
-        d.pending.push({ id: uid(), text: text, category: cat, sender: '我' });
+        d.pending.push({ id: uid(), action: 'add', text: text, category: cat, targetCategory: '', sender: '我' });
         Store.save();
         ta.value = '';
         hideBadge = false;
@@ -1538,13 +1643,40 @@
         var pid = btn.dataset.id;
         var item = findPendingById(pid);
         if (!item) return;
-        var selEl = panelRoot.querySelector('[data-role="pending-cat"][data-id="' + pid + '"]');
-        var targetCat = selEl ? selEl.value : item.category;
-        addCardToCategory(targetCat, item.text);
+
+        if (item.action === 'add') {
+          var selEl = panelRoot.querySelector('[data-role="pending-cat"][data-id="' + pid + '"]');
+          var targetCat = selEl ? selEl.value : item.category;
+          addCardToCategory(targetCat, item.text);
+        } else if (item.action === 'delete') {
+          var srcCat = item.category;
+          if (d.categories[srcCat]) {
+            d.categories[srcCat] = d.categories[srcCat].filter(function(c) { return c.text !== item.text; });
+          }
+        } else if (item.action === 'disable') {
+          var srcCat = item.category;
+          if (d.categories[srcCat]) {
+            var card = d.categories[srcCat].find(function(c) { return c.text === item.text; });
+            if (card) card.isDisabled = true;
+          }
+        } else if (item.action === 'move') {
+          var selEl = panelRoot.querySelector('[data-role="pending-target-cat"][data-id="' + pid + '"]');
+          var targetCat = selEl ? selEl.value : item.targetCategory;
+          var srcCat = item.category;
+          if (d.categories[srcCat] && d.categories[targetCat]) {
+            var idx = d.categories[srcCat].findIndex(function(c) { return c.text === item.text; });
+            if (idx !== -1) {
+              var cardToMove = d.categories[srcCat].splice(idx, 1)[0];
+              d.categories[targetCat].push(cardToMove);
+            }
+          }
+        }
+
         d.pending = d.pending.filter(function (p) { return p.id !== pid; });
         Store.save();
         renderAll();
         updateBadges();
+        toast('已同意申请');
         break;
       }
 
@@ -1557,9 +1689,31 @@
       }
 
       case 'approve-all': {
-        if (!d.pending.length) { toast('没有待审核字卡'); return; }
+        if (!d.pending.length) { toast('没有待审核事项'); return; }
         var list = d.pending.slice();
-        list.forEach(function (p) { addCardToCategory(p.category, p.text); });
+        list.forEach(function (p) {
+          if (p.action === 'add') {
+            addCardToCategory(p.category, p.text);
+          } else if (p.action === 'delete') {
+            if (d.categories[p.category]) {
+              d.categories[p.category] = d.categories[p.category].filter(function(c) { return c.text !== p.text; });
+            }
+          } else if (p.action === 'disable') {
+            if (d.categories[p.category]) {
+              var card = d.categories[p.category].find(function(c) { return c.text === p.text; });
+              if (card) card.isDisabled = true;
+            }
+          } else if (p.action === 'move') {
+            var tgt = p.targetCategory || p.category;
+            if (d.categories[p.category] && d.categories[tgt]) {
+              var idx = d.categories[p.category].findIndex(function(c) { return c.text === p.text; });
+              if (idx !== -1) {
+                var cm = d.categories[p.category].splice(idx, 1)[0];
+                d.categories[tgt].push(cm);
+              }
+            }
+          }
+        });
         d.pending = [];
         Store.save();
         renderAll();
@@ -1570,7 +1724,7 @@
 
       case 'clear-pending': {
         if (!d.pending.length) return;
-        var okClear = await confirmModal('清空待审核', '确定清空全部待审核字卡吗？此操作不可撤销。', '清空');
+        var okClear = await confirmModal('清空待审核', '确定清空全部待审核事项吗？此操作不可撤销。', '清空');
         if (!okClear) return;
         d.pending = [];
         Store.save();
@@ -1631,7 +1785,10 @@
         d.categories[newName] = d.categories[oldName] || [];
         delete d.categories[oldName];
         d.categoryOrder = d.categoryOrder.map(function (n) { return n === oldName ? newName : n; });
-        d.pending.forEach(function (p) { if (p.category === oldName) p.category = newName; });
+        d.pending.forEach(function (p) { 
+          if (p.category === oldName) p.category = newName; 
+          if (p.targetCategory === oldName) p.targetCategory = newName;
+        });
         if (expandedCats[oldName]) { delete expandedCats[oldName]; expandedCats[newName] = true; }
         Store.save();
         renderAll();
@@ -1672,6 +1829,22 @@
         });
         if (!moveTo) return;
         deleteCategoryForce(delName, moveTo);
+        break;
+      }
+
+      case 'card-recover': {
+        var rcat = btn.dataset.cat;
+        var rid = btn.dataset.id;
+        var rcardList = d.categories[rcat] || [];
+        for (var i = 0; i < rcardList.length; i++) {
+          if (rcardList[i].id === rid) {
+            rcardList[i].isDisabled = false;
+            Store.save();
+            renderCards();
+            toast('字卡已恢复');
+            break;
+          }
+        }
         break;
       }
 
@@ -1912,7 +2085,6 @@
     window.__mac_observer_attached = true;
     
     var observer = new MutationObserver(function(mutations) {
-      // 防抖处理，避免过度重排
       if (window.__mac_inject_timer) clearTimeout(window.__mac_inject_timer);
       window.__mac_inject_timer = setTimeout(function() {
         tryInjectNativeIcon();
@@ -1933,7 +2105,7 @@
 
     createBall();
     applyEntryUI();
-    setupObserver(); // 初始化监听
+    setupObserver();
     
     if (isForceShow) {
       setTimeout(function () { toast('已通过 URL 强制显示悬浮球'); }, 1000);
