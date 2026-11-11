@@ -1,7 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版
- * 全部数据存放于 localStorage['my-audit-cards']
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（强化注入与隐藏逻辑）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -14,18 +13,26 @@
    * ===================================================================== */
   var LS_KEY = 'my-audit-cards';
   var CHAT_KEY = 'xy-home-v2:default:chat-msgs';
-  var MAX_PENDING = 5;               // 待审核最多积压条数
-  var FETCH_INTERVAL = 10 * 60 * 1000; // 10 分钟
-  var FETCH_PROBABILITY = 0.9;       // Math.random() > 0.9 时触发（10%）
+  var MAX_PENDING = 5;
+  var FETCH_INTERVAL = 10 * 60 * 1000;
+  var FETCH_PROBABILITY = 0.9;
   var DEFAULT_CATEGORY = '未分类';
 
   var DEFAULT_SETTINGS = {
     color: '#6c8cff',
     size: 56,
     image: '',
-    position: null,   // {x, y} 屏幕坐标（左上角）；null 表示默认右下角
-    isHidden: false
+    position: null,   // {x, y} 坐标；null 为默认
+    isHidden: false   // 是否隐藏悬浮球
   };
+
+  // 救命后门：检测 URL 中是否含有 ?show_audit=true
+  var isForceShow = false;
+  try {
+    if (window.location.search.indexOf('show_audit=true') !== -1) {
+      isForceShow = true;
+    }
+  } catch (e) {}
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -83,7 +90,6 @@
     };
   }
 
-  /** 把任意来源的原始对象整理成合法数据结构 */
   function normalizeData(parsed) {
     var d = {
       categories: {},
@@ -151,7 +157,6 @@
         toast('本地存储写入失败，可能超出容量');
       }
     },
-    /** 确保至少有一个分类 */
     ensureDefaults: function () {
       var d = this.data;
       if (!d.categoryOrder.length) {
@@ -175,6 +180,8 @@
     'background-position:center;background-repeat:no-repeat;font-family:-apple-system,BlinkMacSystemFont,',
     '"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#fff;}',
     '.mac-float-ball .mac-ball-text{font-weight:700;line-height:1;pointer-events:none;letter-spacing:1px;}',
+
+    /* ---------- 角标 ---------- */
     '.mac-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;',
     'border-radius:9px;background:#ff3b30;color:#fff;font-size:11px;line-height:18px;text-align:center;',
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
@@ -182,20 +189,18 @@
 
     /* ---------- 原生图标注入 ---------- */
     '.mac-native-icon{position:relative;cursor:pointer;box-sizing:border-box;display:flex!important;',
-    'flex-direction:column;align-items:center;justify-content:center;box-shadow:none!important;}',
+    'flex-direction:column;align-items:center;justify-content:center;box-shadow:none!important;',
+    'background:transparent;padding:0;margin:0;}',
     '.mac-native-inner{position:relative;display:inline-flex;align-items:center;justify-content:center;',
     'width:44px;height:44px;border-radius:50%;background:#6c8cff;color:#fff;font-size:16px;font-weight:700;',
     'background-size:cover;background-position:center;background-repeat:no-repeat;overflow:visible;',
     'box-shadow:none!important;border:none;}',
-    '.mac-native-label{display:block;font-size:11px;line-height:1.4;margin-top:3px;text-align:center;',
+    '.mac-native-label{display:block;font-size:11px;line-height:1.4;margin-top:4px;text-align:center;',
     'color:inherit;opacity:.85;pointer-events:none;}',
-
-    /* ---------- 隐藏后的边缘竖条 ---------- */
-    '.mac-edge-bar{position:fixed;left:0;top:50%;transform:translateY(-50%);width:10px;height:130px;',
-    'background:rgba(108,140,255,.10);border-radius:0 6px 6px 0;z-index:2147482000;cursor:pointer;',
-    'display:none;touch-action:none;}',
-    '.mac-edge-bar::after{content:"";position:absolute;left:0;top:0;width:100%;height:100%;',
-    'border-radius:0 6px 6px 0;background:rgba(108,140,255,.06);}',
+    
+    /* ---------- 降级固定图标 ---------- */
+    '.mac-fallback-icon {position:fixed;top:15px;right:15px;z-index:2147483000;background:rgba(255,255,255,0.95);',
+    'border:1px solid #eef0f5;border-radius:12px;padding:6px 8px;box-shadow:none!important;}',
 
     /* ---------- 面板 ---------- */
     '.mac-overlay{position:fixed;inset:0;background:rgba(15,20,35,.45);z-index:2147483600;display:none;',
@@ -322,7 +327,6 @@
       document.body.appendChild(t);
     }
     t.textContent = msg;
-    // 强制重排以便动画生效
     void t.offsetWidth;
     t.classList.add('is-show');
     clearTimeout(toastTimer);
@@ -382,8 +386,7 @@
    * 5. 图片裁剪（圆形预览）
    * ===================================================================== */
   function openCropModal(dataUrl, cb) {
-    var V = 280; // 预览画布尺寸
-
+    var V = 280;
     var overlay = document.createElement('div');
     overlay.className = 'mac-modal-overlay';
     overlay.innerHTML =
@@ -441,7 +444,6 @@
       ctx.stroke();
     }
 
-    /* ---- 拖拽 ---- */
     var dragging = false, sx = 0, sy = 0, sox = 0, soy = 0;
     canvas.addEventListener('pointerdown', function (e) {
       if (!ready) return;
@@ -505,12 +507,12 @@
   }
 
   /* =======================================================================
-   * 6. 入口：悬浮球 / 原生图标 / 边缘竖条
+   * 6. 入口：悬浮球 / 原生图标
    * ===================================================================== */
   var ball = null;
-  var edgeBar = null;
   var nativeIconEl = null;
-  var hideBadge = false; // 打开面板后角标清零
+  var hideBadge = false;
+  var bootTime = Date.now();
 
   /* ---------- 6.1 悬浮球 ---------- */
   function createBall() {
@@ -532,7 +534,6 @@
       startY = e.clientY;
       startLeft = r.left;
       startTop = r.top;
-      // 从 right/bottom 定位切换到 left/top，保证拖拽连贯
       ball.style.left = r.left + 'px';
       ball.style.top = r.top + 'px';
       ball.style.right = 'auto';
@@ -593,57 +594,48 @@
     }
   }
 
-  /* ---------- 6.2 边缘竖条（长按 2 秒恢复） ---------- */
-  function createEdgeBar() {
-    if (edgeBar) return;
-    edgeBar = document.createElement('div');
-    edgeBar.className = 'mac-edge-bar';
-    document.body.appendChild(edgeBar);
-
-    var pressTimer = null;
-
-    function cancelPress() {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
+  /* ---------- 6.2 寻找并构建原生图标 ---------- */
+  function findGrid() {
+    // 加入了你截图里出现的特征文字
+    var keywords = ['番茄钟', '心意市集', '备忘录', '梦角档案', '经期记录', '吃什么', '聊天', '信件'];
+    var allEls = document.querySelectorAll('div');
+    var bestGrid = null;
+    var maxScore = -1;
+    
+    for (var i = 0; i < allEls.length; i++) {
+      var el = allEls[i];
+      var txt = el.textContent || '';
+      if (txt.length > 300) continue;
+      
+      var matchCount = 0;
+      for (var j = 0; j < keywords.length; j++) {
+        if (txt.indexOf(keywords[j]) !== -1) matchCount++;
+      }
+      if (matchCount < 2) continue; // 至少包含两个关键词才认作目标网格
+      
+      // 向上寻找
+      var p = el;
+      for (var d = 0; d < 6 && p; d++) {
+        var kids = p.children;
+        if (kids && kids.length >= 6 && kids.length <= 20) {
+          var validKids = 0;
+          for (var k = 0; k < kids.length; k++) {
+            var kText = (kids[k].textContent || '').trim();
+            if (kText.length > 0 && kText.length < 30) validKids++;
+          }
+          if (validKids >= 6) {
+            var score = validKids + matchCount * 2;
+            if (score > maxScore) {
+              maxScore = score;
+              bestGrid = p;
+            }
+            break; 
+          }
+        }
+        p = p.parentElement;
       }
     }
-
-    edgeBar.addEventListener('pointerdown', function (e) {
-      cancelPress();
-      e.preventDefault();
-      pressTimer = setTimeout(function () {
-        pressTimer = null;
-        Store.data.settings.isHidden = false;
-        Store.save();
-        applyEntryUI();
-        toast('入口已恢复显示');
-      }, 2000);
-    });
-    edgeBar.addEventListener('pointerup', cancelPress);
-    edgeBar.addEventListener('pointerleave', cancelPress);
-    edgeBar.addEventListener('pointercancel', cancelPress);
-  }
-
-  /* ---------- 6.3 原生九宫格图标注入 ---------- */
-  function findGrid() {
-    var nodes = document.querySelectorAll('div, ul, nav, section, main');
-    var best = null;
-    var bestDepth = -1;
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      if (el.closest && el.closest('[data-mac-native-icon]')) continue;
-      var kids = el.children;
-      if (!kids || kids.length < 3 || kids.length > 30) continue;
-      var text = (el.textContent || '').replace(/\s+/g, '');
-      if (!text || text.length > 120) continue;
-      if (text.indexOf('聊天') === -1 || text.indexOf('信件') === -1) continue;
-      var depth = 0;
-      var p = el;
-      while (p && p !== document.body) { depth++; p = p.parentElement; }
-      if (depth > bestDepth) { bestDepth = depth; best = el; }
-    }
-    return best;
+    return bestGrid;
   }
 
   function buildNativeIcon(grid) {
@@ -663,8 +655,6 @@
 
     node.setAttribute('data-mac-native-icon', '1');
     node.classList.add('mac-native-icon');
-    node.style.cursor = 'pointer';
-    node.style.position = 'relative';
 
     node.innerHTML =
       '<span class="mac-native-inner">' +
@@ -680,6 +670,32 @@
     }, true);
 
     grid.appendChild(node);
+    return node;
+  }
+
+  /* ---------- 6.3 降级方案（固定右上角） ---------- */
+  function createFallbackNativeIcon() {
+    if (document.querySelector('[data-mac-fallback-icon]')) {
+      return document.querySelector('[data-mac-fallback-icon]');
+    }
+    var node = document.createElement('div');
+    node.setAttribute('data-mac-fallback-icon', '1');
+    node.className = 'mac-native-icon mac-fallback-icon';
+    
+    node.innerHTML =
+      '<span class="mac-native-inner" style="background:#6c8cff;border-radius:50%;">' +
+        '<span class="mac-native-text">审</span>' +
+        '<span class="mac-badge" data-role="ball-badge"></span>' +
+      '</span>' +
+      '<span class="mac-native-label" style="color:#3a4152;">审核</span>';
+
+    node.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openPanel();
+    }, true);
+
+    document.body.appendChild(node);
     return node;
   }
 
@@ -708,34 +724,45 @@
     }
   }
 
-  function removeNativeIcon() {
-    if (nativeIconEl && nativeIconEl.parentNode) {
-      nativeIconEl.parentNode.removeChild(nativeIconEl);
-    }
-    nativeIconEl = null;
-  }
-
   function tryInjectNativeIcon() {
     try {
-      var s = Store.data.settings;
-      if (s.isHidden) { removeNativeIcon(); return; }
-      if (nativeIconEl && document.body.contains(nativeIconEl)) {
+      var grid = findGrid();
+      if (grid) {
+        // 如果有网格，优先塞进网格。清理掉降级按钮
+        var fallback = document.querySelector('[data-mac-fallback-icon]');
+        if (fallback) fallback.remove();
+
+        var existing = grid.querySelector('[data-mac-native-icon]');
+        if (existing) {
+          nativeIconEl = existing;
+          updateNativeIcon();
+          updateBadges();
+          return;
+        }
+        nativeIconEl = buildNativeIcon(grid);
         updateNativeIcon();
         updateBadges();
-        return;
+      } else {
+        // 如果没找到网格
+        if (!nativeIconEl || !document.body.contains(nativeIconEl)) {
+          nativeIconEl = null;
+          // 延迟 3 秒降级，防网页还没加载完
+          if (Date.now() - bootTime > 3000) {
+            nativeIconEl = createFallbackNativeIcon();
+            updateNativeIcon();
+            updateBadges();
+          }
+        } else {
+          updateNativeIcon();
+          updateBadges();
+        }
       }
-      var grid = findGrid();
-      if (!grid) return;
-      if (grid.querySelector('[data-mac-native-icon]')) return;
-      nativeIconEl = buildNativeIcon(grid);
-      updateNativeIcon();
-      updateBadges();
     } catch (e) {
-      /* 注入失败不影响悬浮球，静默 */
+      /* 静默容错 */
     }
   }
 
-  /* ---------- 6.4 角标 ---------- */
+  /* ---------- 6.4 角标与外观 ---------- */
   function updateBadges() {
     var n = Store.data.pending.length;
     var nodes = document.querySelectorAll('[data-role="ball-badge"]');
@@ -750,12 +777,13 @@
     }
   }
 
-  /* ---------- 6.5 应用整体外观 ---------- */
   function applyEntryUI() {
     var s = Store.data.settings;
-
+    
+    // 1. 悬浮球逻辑：仅受 isHidden 控制，但被 URL 后门强制覆盖
     if (ball) {
-      ball.style.display = s.isHidden ? 'none' : 'flex';
+      var shouldShowBall = !s.isHidden || isForceShow;
+      ball.style.display = shouldShowBall ? 'flex' : 'none';
       ball.style.width = s.size + 'px';
       ball.style.height = s.size + 'px';
       ball.style.backgroundColor = s.image ? 'transparent' : s.color;
@@ -767,25 +795,13 @@
       positionBall();
     }
 
-    if (edgeBar) {
-      edgeBar.style.display = s.isHidden ? 'block' : 'none';
-    }
-
-    if (s.isHidden) {
-      removeNativeIcon();
-    } else {
-      if (nativeIconEl && document.body.contains(nativeIconEl)) {
-        updateNativeIcon();
-      } else {
-        tryInjectNativeIcon();
-      }
-    }
-
+    // 2. 原生图标逻辑：永远不隐藏（提供唯一的常规入口）
+    tryInjectNativeIcon();
     updateBadges();
   }
 
   /* =======================================================================
-   * 7. 自动抓取（拟人化 · 低频 · 静默）
+   * 7. 自动抓取（保留原有稳健逻辑）
    * ===================================================================== */
   function pickTimestamp(m) {
     var keys = ['time', 'timestamp', 'createdAt', 'created_at', 'ts', 'date', 'sendTime'];
@@ -816,7 +832,6 @@
   }
 
   function autoFetch() {
-    // 10% 概率触发
     if (!(Math.random() > FETCH_PROBABILITY)) return;
 
     var raw = null;
@@ -828,12 +843,11 @@
     if (!Array.isArray(msgs) || !msgs.length) return;
 
     var d = Store.data;
-    if (d.pending.length >= MAX_PENDING) return; // 积压已满，暂停
+    if (d.pending.length >= MAX_PENDING) return;
 
     var now = Date.now();
     var WINDOW = 10 * 60 * 1000;
 
-    // 已知文本集合（字卡库 + 待审核）
     var known = Object.create(null);
     d.pending.forEach(function (p) { known[p.text] = 1; });
     d.categoryOrder.forEach(function (name) {
@@ -855,10 +869,9 @@
       var ts = pickTimestamp(m);
       if (hasAnyTimestamp) {
         if (ts === null) continue;
-        if (now - ts > WINDOW) continue;         // 超过 10 分钟
-        if (ts - now > 60 * 1000) continue;       // 未来时间容错
+        if (now - ts > WINDOW) continue;
+        if (ts - now > 60 * 1000) continue;
       } else {
-        // 无时间戳时退化为：只看最后 15 条
         if (i < msgs.length - 15) continue;
       }
 
@@ -868,14 +881,14 @@
       var len = Array.from(text).length;
       if (len < 5 || len > 35) continue;
 
-      if (known[text]) continue;      // 严格去重
+      if (known[text]) continue;
       known[text] = 1;
 
       d.pending.push({
         id: uid(),
         text: text,
         category: d.categoryOrder[0] || DEFAULT_CATEGORY,
-        sender: '梦角'                 // 核心：自动抓取的来源
+        sender: '梦角'
       });
       added++;
     }
@@ -884,7 +897,6 @@
       Store.save();
       hideBadge = false;
       refreshUI();
-      // 静默提示（非阻塞，不使用 alert）
       toast('已静默收录 ' + added + ' 条字卡');
     }
   }
@@ -909,7 +921,6 @@
         '</div>' +
         '<div class="mac-panes">' +
 
-          /* ---- 待审核 ---- */
           '<div class="mac-pane is-active" data-pane="review">' +
             '<div class="mac-addbox">' +
               '<textarea class="mac-textarea" data-role="manual-text" ' +
@@ -926,7 +937,6 @@
             '</div>' +
           '</div>' +
 
-          /* ---- 字卡库 ---- */
           '<div class="mac-pane" data-pane="cards">' +
             '<div class="mac-row">' +
               '<input class="mac-input" data-role="new-cat" placeholder="新分类名称">' +
@@ -935,7 +945,6 @@
             '<div class="mac-cat-list" data-role="cat-list"></div>' +
           '</div>' +
 
-          /* ---- 设置 ---- */
           '<div class="mac-pane" data-pane="settings">' +
             '<div class="mac-section">' +
               '<div class="mac-section-title">图标外观</div>' +
@@ -953,7 +962,10 @@
             '<div class="mac-section">' +
               '<div class="mac-section-title">入口控制</div>' +
               '<label class="mac-check"><input type="checkbox" data-role="set-hidden"> ' +
-                '隐藏所有入口（长按屏幕左侧竖条 2 秒恢复）</label>' +
+                '隐藏悬浮球（仅隐藏右下角球体，原生图标不受影响）</label>' +
+              '<div style="font-size:12px;color:#9aa1b2;margin-top:6px;line-height:1.5;">' +
+                '开启后，只能通过原网页【审核】图标进入面板关闭。若找不到入口，可在网址后加 <b>?show_audit=true</b> 救急。' +
+              '</div>' +
               '<div class="mac-row">' +
                 '<button class="mac-btn" data-act="reset-pos">重置悬浮球位置</button>' +
               '</div>' +
@@ -987,7 +999,7 @@
     ensurePanel();
     panelRoot.classList.add('is-open');
     renderAll();
-    hideBadge = true;   // 点开面板后角标清零
+    hideBadge = true;
     updateBadges();
   }
 
@@ -1007,7 +1019,6 @@
     }
   }
 
-  /* ---------- 8.1 渲染 ---------- */
   function findCatEl(name) {
     if (!panelRoot) return null;
     var nodes = panelRoot.querySelectorAll('.mac-cat');
@@ -1146,7 +1157,6 @@
     renderSettings();
   }
 
-  /** 数据变更后的统一刷新 */
   function refreshUI() {
     updateBadges();
     if (panelRoot && panelRoot.classList.contains('is-open')) {
@@ -1155,7 +1165,6 @@
     applyEntryUI();
   }
 
-  /* ---------- 8.2 事件绑定 ---------- */
   function bindPanelEvents(root) {
     root.addEventListener('click', function (e) {
       var tabBtn = e.target.closest('[data-tab]');
@@ -1184,7 +1193,6 @@
         }
         return;
       }
-
       if (t.matches('[data-role="pending-cat"]')) {
         var id = t.dataset.id;
         var item = null;
@@ -1194,26 +1202,22 @@
         if (item) { item.category = t.value; Store.save(); }
         return;
       }
-
       if (t.matches('[data-role="set-hidden"]')) {
         Store.data.settings.isHidden = !!t.checked;
         Store.save();
         applyEntryUI();
         return;
       }
-
       if (t.matches('[data-role="import-file"]')) {
         if (t.files && t.files[0]) importBackup(t.files[0]);
         t.value = '';
         return;
       }
-
       if (t.matches('[data-role="img-file"]')) {
         if (t.files && t.files[0]) handleImageFile(t.files[0]);
         t.value = '';
         return;
       }
-
       if (t.matches('[data-role="set-color"]')) {
         Store.data.settings.color = t.value;
         Store.save();
@@ -1224,7 +1228,6 @@
 
     root.addEventListener('input', function (e) {
       var t = e.target;
-
       if (t.matches('[data-role="set-size"]')) {
         Store.data.settings.size = parseInt(t.value, 10) || 56;
         var v = root.querySelector('[data-role="size-val"]');
@@ -1233,7 +1236,6 @@
         applyEntryUI();
         return;
       }
-
       if (t.matches('[data-role="set-color"]')) {
         Store.data.settings.color = t.value;
         Store.save();
@@ -1242,9 +1244,7 @@
       }
     });
 
-    /* ---- 桌面端拖拽排序（手机端使用上移/下移按钮） ---- */
     var dragSrcCat = null;
-
     root.addEventListener('dragstart', function (e) {
       var head = e.target.closest ? e.target.closest('.mac-cat-head') : null;
       if (!head) return;
@@ -1290,7 +1290,6 @@
     });
   }
 
-  /* ---------- 8.3 通用辅助 ---------- */
   function findPendingById(id) {
     for (var i = 0; i < Store.data.pending.length; i++) {
       if (Store.data.pending[i].id === id) return Store.data.pending[i];
@@ -1336,18 +1335,12 @@
     toast('分类已删除');
   }
 
-  /* ---------- 8.4 动作分发 ---------- */
   async function handleAction(act, btn) {
     var d = Store.data;
 
     switch (act) {
+      case 'close': closePanel(); break;
 
-      case 'close': {
-        closePanel();
-        break;
-      }
-
-      /* ---------------- 待审核 ---------------- */
       case 'manual-add': {
         var ta = panelRoot.querySelector('[data-role="manual-text"]');
         var text = (ta.value || '').trim();
@@ -1356,12 +1349,7 @@
         var catSel = panelRoot.querySelector('[data-role="manual-cat"]');
         var cat = (catSel && catSel.value) || d.categoryOrder[0] || DEFAULT_CATEGORY;
 
-        d.pending.push({
-          id: uid(),
-          text: text,
-          category: cat,
-          sender: '我'          // 核心：手动提交的来源
-        });
+        d.pending.push({ id: uid(), text: text, category: cat, sender: '我' });
         Store.save();
         ta.value = '';
         hideBadge = false;
@@ -1386,8 +1374,7 @@
       }
 
       case 'reject': {
-        var rid = btn.dataset.id;
-        d.pending = d.pending.filter(function (p) { return p.id !== rid; });
+        d.pending = d.pending.filter(function (p) { return p.id !== btn.dataset.id; });
         Store.save();
         renderAll();
         updateBadges();
@@ -1397,9 +1384,7 @@
       case 'approve-all': {
         if (!d.pending.length) { toast('没有待审核字卡'); return; }
         var list = d.pending.slice();
-        list.forEach(function (p) {
-          addCardToCategory(p.category, p.text);
-        });
+        list.forEach(function (p) { addCardToCategory(p.category, p.text); });
         d.pending = [];
         Store.save();
         renderAll();
@@ -1419,7 +1404,6 @@
         break;
       }
 
-      /* ---------------- 分类 ---------------- */
       case 'add-cat': {
         var input = panelRoot.querySelector('[data-role="new-cat"]');
         var name = (input.value || '').trim();
@@ -1451,8 +1435,7 @@
       }
 
       case 'cat-toggle': {
-        var tname = btn.dataset.cat;
-        expandedCats[tname] = !expandedCats[tname];
+        expandedCats[btn.dataset.cat] = !expandedCats[btn.dataset.cat];
         renderCards();
         break;
       }
@@ -1461,8 +1444,7 @@
         var oldName = btn.dataset.cat;
         var newName = await showModal({
           title: '重命名分类',
-          html: '<input class="mac-input" data-role="rename-input" style="width:100%" value="' +
-            escAttr(oldName) + '">',
+          html: '<input class="mac-input" data-role="rename-input" style="width:100%" value="' + escAttr(oldName) + '">',
           okText: '保存',
           onOk: function (rootEl) {
             var inp = rootEl.querySelector('[data-role="rename-input"]');
@@ -1473,16 +1455,9 @@
         if (d.categories[newName]) { toast('同名分类已存在'); return; }
         d.categories[newName] = d.categories[oldName] || [];
         delete d.categories[oldName];
-        d.categoryOrder = d.categoryOrder.map(function (n) {
-          return n === oldName ? newName : n;
-        });
-        d.pending.forEach(function (p) {
-          if (p.category === oldName) p.category = newName;
-        });
-        if (expandedCats[oldName]) {
-          delete expandedCats[oldName];
-          expandedCats[newName] = true;
-        }
+        d.categoryOrder = d.categoryOrder.map(function (n) { return n === oldName ? newName : n; });
+        d.pending.forEach(function (p) { if (p.category === oldName) p.category = newName; });
+        if (expandedCats[oldName]) { delete expandedCats[oldName]; expandedCats[newName] = true; }
         Store.save();
         renderAll();
         break;
@@ -1493,34 +1468,26 @@
         var cards = d.categories[delName] || [];
         var others = d.categoryOrder.filter(function (n) { return n !== delName; });
 
-        // 空分类：直接确认
         if (!cards.length) {
           var okEmpty = await confirmModal('删除分类', '确定删除空分类「' + delName + '」吗？', '删除');
           if (okEmpty) deleteCategoryForce(delName, null);
           return;
         }
 
-        // 唯一分类：确认后连同字卡一起删除
         if (!others.length) {
-          var okOnly = await confirmModal(
-            '删除分类',
-            '「' + delName + '」是唯一分类且包含 ' + cards.length + ' 张字卡，删除将同时移除这些字卡，确定吗？',
-            '一并删除'
-          );
+          var okOnly = await confirmModal('删除分类',
+            '「' + delName + '」是唯一分类且包含 ' + cards.length + ' 张字卡，删除将同时移除这些字卡，确定吗？', '一并删除');
           if (okOnly) deleteCategoryForce(delName, null);
           return;
         }
 
-        // 非空分类：自定义模态框选择转移目标
         var moveTo = await showModal({
           title: '删除分类',
           html:
             '<div class="mac-tip">分类「' + esc(delName) + '」下有 <b>' + cards.length +
             '</b> 张字卡，请选择要转移到的目标分类：</div>' +
             '<select class="mac-select" data-role="move-target" style="width:100%;margin-top:10px">' +
-              others.map(function (n) {
-                return '<option value="' + escAttr(n) + '">' + esc(n) + '</option>';
-              }).join('') +
+              others.map(function (n) { return '<option value="' + escAttr(n) + '">' + esc(n) + '</option>'; }).join('') +
             '</select>',
           okText: '转移并删除',
           onOk: function (rootEl) {
@@ -1533,7 +1500,6 @@
         break;
       }
 
-      /* ---------------- 字卡 ---------------- */
       case 'card-edit': {
         var ecat = btn.dataset.cat;
         var eid = btn.dataset.id;
@@ -1578,9 +1544,7 @@
         if (!ids.length) { toast('请先勾选字卡'); return; }
         var okBatch = await confirmModal('批量删除', '确定删除选中的 ' + ids.length + ' 张字卡吗？', '删除');
         if (!okBatch) return;
-        d.categories[bcat] = (d.categories[bcat] || []).filter(function (c) {
-          return ids.indexOf(c.id) === -1;
-        });
+        d.categories[bcat] = (d.categories[bcat] || []).filter(function (c) { return ids.indexOf(c.id) === -1; });
         Store.save();
         renderCards();
         toast('已删除 ' + ids.length + ' 张字卡');
@@ -1596,12 +1560,8 @@
         var tgt = tgtSel ? tgtSel.value : '';
         if (!tgt) { toast('没有可转移的目标分类'); return; }
 
-        var moving = (d.categories[mcat] || []).filter(function (c) {
-          return mids.indexOf(c.id) !== -1;
-        });
-        d.categories[mcat] = (d.categories[mcat] || []).filter(function (c) {
-          return mids.indexOf(c.id) === -1;
-        });
+        var moving = (d.categories[mcat] || []).filter(function (c) { return mids.indexOf(c.id) !== -1; });
+        d.categories[mcat] = (d.categories[mcat] || []).filter(function (c) { return mids.indexOf(c.id) === -1; });
         d.categories[tgt] = (d.categories[tgt] || []).concat(moving);
         Store.save();
         renderCards();
@@ -1609,7 +1569,6 @@
         break;
       }
 
-      /* ---------------- 设置 ---------------- */
       case 'upload-img': {
         var fileInput = panelRoot.querySelector('[data-role="img-file"]');
         if (fileInput) fileInput.click();
@@ -1633,32 +1592,19 @@
         break;
       }
 
-      case 'export': {
-        exportBackup();
-        break;
-      }
-
+      case 'export': exportBackup(); break;
       case 'import': {
         var imp = panelRoot.querySelector('[data-role="import-file"]');
         if (imp) imp.click();
         break;
       }
-
-      default:
-        break;
+      default: break;
     }
   }
 
-  /* ---------- 8.5 图片上传 ---------- */
   function handleImageFile(file) {
-    if (!/^image\//.test(file.type)) {
-      toast('请选择图片文件');
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      toast('图片过大（请小于 8MB）');
-      return;
-    }
+    if (!/^image\//.test(file.type)) { toast('请选择图片文件'); return; }
+    if (file.size > 8 * 1024 * 1024) { toast('图片过大（请小于 8MB）'); return; }
     var reader = new FileReader();
     reader.onload = function () {
       openCropModal(String(reader.result), function (dataUrl) {
@@ -1775,22 +1721,25 @@
 
     Store.load();
     Store.ensureDefaults();
-
     injectCSS();
-    createBall();
-    createEdgeBar();
-    applyEntryUI();
 
-    // 低频自动抓取：每 10 分钟一次
+    createBall();
+    // 首次尝试注入和获取状态
+    applyEntryUI();
+    
+    // 如果有 URL 后门，打开时给个 Toast 提示
+    if (isForceShow) {
+      setTimeout(function () { toast('已通过 URL 强制显示悬浮球'); }, 1000);
+    }
+
     setInterval(function () {
-      try { autoFetch(); } catch (e) { /* 静默容错 */ }
+      try { autoFetch(); } catch (e) {}
     }, FETCH_INTERVAL);
 
-    // 原生图标注入（SPA 页面 DOM 可能延迟渲染，低频重试）
+    // 持续尝试注入原生图标（应对 SPA 的延迟渲染）
     setInterval(function () {
-      try { tryInjectNativeIcon(); } catch (e) { /* 静默容错 */ }
+      try { tryInjectNativeIcon(); } catch (e) {}
     }, 3000);
-    tryInjectNativeIcon();
 
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
@@ -1798,7 +1747,6 @@
 
   ready(boot);
 
-  /* ---------- 对外暴露少量调试接口（可选） ---------- */
   window.MyAuditCards = {
     open: openPanel,
     close: closePanel,
