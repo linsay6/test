@@ -1,6 +1,7 @@
 /* ============================================================================
  * my-new-feature.js 终极完美版
- * 修复：1. 红点变数字 2. 精准抓取完整消息行（带时间/头像） 3. 禁用逻辑反转
+ * 修复：1. 原生图标数字角标 2. 气泡强制左对齐 3. 装修模式属性注入 
+ *       4. 批量换行提交审核 5. 批量同意/拒绝待审核
  * ========================================================================== */
 (function () {
   'use strict';
@@ -66,7 +67,7 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  /* 终极修复：智能抓取包含时间/头像的完整消息行 */
+  /* 核心修复：强制克隆左侧气泡并保证左对齐 */
   function injectBubbleToChat(text) {
     try {
       var msgs = readChatMsgs(); msgs.push({ side: 'in', text: text, time: Date.now() }); writeChatMsgs(msgs);
@@ -74,31 +75,13 @@
       if (!chatBody) { console.warn('[审计] 找不到 #chat-body'); return false; }
       var children = Array.from(chatBody.children), templateNode = null;
       
-      // 第一遍：寻找带有时间格式或头像的完整节点
+      // 第一遍：寻找干净的对方普通文字气泡（跳过复杂分析卡片，跳过右侧气泡）
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
         var txt = el.textContent || '';
-        if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0) continue;
-        
-        // 核心判断：有 HH:MM 时间格式 或 有 img/svg 头像
-        var hasTime = /\d{1,2}:\d{2}/.test(txt);
-        var hasAvatar = el.querySelector('img, svg, .avatar, [class*="avatar"]');
-        if ((hasTime || hasAvatar) && txt.trim().length > 0) {
-            templateNode = el; 
-            break;
-        }
-      }
-
-      // 第二遍兜底：如果上面没找到，说明原网页结构特殊，退化找普通文字节点
-      if (!templateNode) {
-        for (var i = children.length - 1; i >= 0; i--) {
-          var el = children[i], cls = (el.className || '').toLowerCase();
-          if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
-          var txt = el.textContent || '';
-          if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0) continue;
-          if (txt.trim().length > 0) { templateNode = el; break; }
-        }
+        if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0 || txt.indexOf('情绪 ') >= 0) continue; 
+        if (txt.trim().length > 0) { templateNode = el; break; }
       }
 
       if (!templateNode) { console.warn('[审计] 找不到可克隆的对方气泡节点'); return false; }
@@ -106,14 +89,21 @@
       if (clone.id) clone.removeAttribute('id');
       var nodesWithId = clone.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
       
-      // 寻找最长的文本节点进行替换（保护时间、头像等不被修改）
-      var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
-      while ((tn = walker.nextNode())) { 
-          var len = tn.nodeValue.trim().length; 
-          // 跳过时间格式的节点
-          if (/^\d{1,2}:\d{2}$/.test(tn.nodeValue.trim())) continue;
-          if (len > maxLen) { maxLen = len; targetTextNode = tn; } 
+      // 清理可能导致右对齐的类名
+      if (clone.classList) {
+        clone.classList.remove('msg-out', 'me', 'right', 'self');
+        // 强行加入一般原网页会用的左侧类名，如有冲突也无妨
+        clone.classList.add('msg-in', 'left');
       }
+      
+      // 暴力覆写行内样式，强制靠左
+      clone.style.alignSelf = 'flex-start';
+      clone.style.marginLeft = '0';
+      clone.style.marginRight = 'auto';
+
+      // 替换文本
+      var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
+      while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
       if (targetTextNode) targetTextNode.nodeValue = text; else clone.innerText = text;
       
       chatBody.appendChild(clone);
@@ -124,6 +114,7 @@
 
   function autoPendingCount() { var n = 0; try { for (var i = 0; i < DB.pending.length; i++) { var p = DB.pending[i]; if (p.status === 'pending' && p.sender === SENDER_MJ && p.action === 'add') n++; } } catch (e) {} return n; }
   function pendingCount() { var n = 0; try { for (var i = 0; i < DB.pending.length; i++) if (DB.pending[i].status === 'pending') n++; } catch (e) {} return n; }
+  
   function grabFromChat() {
     safe(function () {
       if (!DB || autoPendingCount() >= MAX_AUTO_PENDING) return;
@@ -148,6 +139,7 @@
       DB.meta.lastGrabAt = Date.now();
     }, 'grabFromChat');
   }
+  
   function maybeMischief() {
     safe(function () {
       if (!DB || Math.random() > MISCHIEF_RATE) return;
@@ -163,6 +155,7 @@
       DB.meta.lastMischiefAt = Date.now();
     }, 'maybeMischief');
   }
+  
   function autoSendCard() {
     safe(function () {
       if (!DB || !DB.groups) return; var validCards = [];
@@ -171,6 +164,7 @@
       var ok = injectBubbleToChat(randomText); if (ok) console.log('[审计] 梦角自动发送成功：', randomText);
     }, 'autoSendCard');
   }
+  
   function tickEngine() { safe(function () { grabFromChat(); maybeMischief(); autoSendCard(); saveData(); updateBadge(); if (PANEL_OPEN && CURRENT_TAB === 'pending') renderPanelBody(); }, 'tickEngine'); }
   function startEngine() { safe(function () { var now = Date.now(); if (!DB.meta.lastGrabAt || (now - DB.meta.lastGrabAt) > ENGINE_INTERVAL) tickEngine(); else { maybeMischief(); saveData(); updateBadge(); } setInterval(function () { safe(tickEngine, 'tickEngine:interval'); }, ENGINE_INTERVAL); }, 'startEngine'); }
 
@@ -181,10 +175,9 @@
         '#ma-root{position:static;margin:0;padding:0;}','#ma-root,#ma-root *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}',
         '#ma-fab{position:fixed;z-index:' + (Z_BASE + 10) + ';display:flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-size:13px;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;cursor:pointer;user-select:none;background-color:#ff6b81;background-size:cover;background-position:center;background-repeat:no-repeat;box-shadow:none;border:none;outline:none;transition:transform .15s ease,opacity .2s ease;touch-action:none;overflow:visible;}',
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
-        '#ma-fab .ma-fab-dot{position:absolute;top:-1px;right:-1px;width:11px;height:11px;border-radius:50%;background:#ff2d55;display:none;pointer-events:none;}','#ma-fab .ma-fab-dot.on{display:block;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
+        '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         '#ma-app-icon{position:relative;cursor:pointer;}',
-        // 新增：原生图标的数字角标样式
-        '#ma-app-icon .ma-app-badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;color:#fff;font-size:10px;display:none;align-items:center;justify-content:center;font-weight:bold;border:1px solid #fff;box-sizing:border-box;}',
+        '#ma-app-icon .ma-app-dot{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;border:1px solid #fff;z-index:10;}','#ma-app-icon .ma-app-dot.on{display:flex;}',
         '#ma-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;}','#ma-mask.on{display:flex;}',
         '#ma-panel{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;color:#222;line-height:1.5;box-shadow:0 12px 40px rgba(0,0,0,.22);}',
         '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;}','.ma-title{font-size:16px;font-weight:700;}','.ma-close{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#999;cursor:pointer;}','.ma-close:hover{background:#eee;color:#333;}',
@@ -241,7 +234,18 @@
       var src = null; for (var i = 0; i < natives.length; i++) { if (natives[i].offsetParent !== null && natives[i].getBoundingClientRect().width > 0) { src = natives[i]; break; } }
       if (!src) src = natives[0];
       var clone = null; try { clone = src.cloneNode(true); } catch (e) { return false; } if (!clone) return false;
-      try { for (var ai = 0; ai < src.attributes.length; ai++) { var attr = src.attributes[ai]; if (attr.name.indexOf('data-') === 0 && attr.name !== 'data-ma-clone') clone.setAttribute(attr.name, attr.value + '_audit'); } } catch (e) {}
+      
+      // 尝试注入原网页搜索模块可能寻找的数据属性
+      try { 
+        for (var ai = 0; ai < src.attributes.length; ai++) { 
+          var attr = src.attributes[ai]; 
+          if (attr.name.indexOf('data-') === 0 && attr.name !== 'data-ma-clone') clone.setAttribute(attr.name, attr.value + '_audit'); 
+        } 
+        clone.setAttribute('data-type', 'app');
+        clone.setAttribute('data-name', '审核');
+        clone.setAttribute('data-title', '审核');
+      } catch (e) {}
+      
       if (clone.id) clone.removeAttribute('id');
       var ids = clone.querySelectorAll ? clone.querySelectorAll('[id]') : []; for (var k = 0; k < ids.length; k++) { try { ids[k].removeAttribute('id'); } catch (e2) {} }
       clone.removeAttribute('style'); var styled = clone.querySelectorAll ? clone.querySelectorAll('[style]') : []; for (var si = 0; si < styled.length; si++) { try { styled[si].removeAttribute('style'); } catch (e3) {} }
@@ -250,9 +254,7 @@
       if (nameEl && !/^(IMG|SVG|CANVAS)$/i.test(nameEl.tagName || '')) nameEl.textContent = '审核';
       else { var span = document.createElement('div'); span.className = 'ma-clone-name'; span.textContent = '审核'; span.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; try { clone.appendChild(span); } catch (e9) {} }
       
-      // 修复：使用数字角标
-      var dot = document.createElement('i'); dot.className = 'ma-app-badge'; try { clone.appendChild(dot); } catch (e10) {}
-      
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; try { clone.appendChild(dot); } catch (e10) {}
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       try { APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]'); } catch (e11) { APP_ICON_IMG_EL = null; }
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone); else if (src.parentNode) src.parentNode.insertBefore(clone, src.nextSibling); else return false;
@@ -305,20 +307,19 @@
     }, 'applyAppearance');
   }
   
-  // 修复：红点改成数字显示
   function updateBadge() { 
     safe(function () { 
       var n = pendingCount(); 
-      
       var f = FAB ? FAB.querySelector('.ma-fab-dot') : null; 
-      if (f) { if (n > 0) f.classList.add('on'); else f.classList.remove('on'); } 
-      
-      var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-badge') : null; 
-      if (a) { 
-        if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.style.display = 'flex'; } 
-        else { a.style.display = 'none'; } 
+      if (f) { 
+        if (n > 0) { f.textContent = n > 99 ? '99+' : n; f.classList.add('on'); } 
+        else { f.classList.remove('on'); } 
       } 
-      
+      var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
+      if (a) { 
+        if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); } 
+        else { a.classList.remove('on'); } 
+      } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
     }, 'updateBadge'); 
@@ -343,6 +344,7 @@
   function renderTabs() { safe(function () { if (!PANEL) return; var ts = PANEL.querySelectorAll('.ma-tab'); for (var i = 0; i < ts.length; i++) { if (ts[i].getAttribute('data-tab') === CURRENT_TAB) ts[i].classList.add('on'); else ts[i].classList.remove('on'); } updateBadge(); }, 'renderTabs'); }
   function openPanel() { safe(function () { ensureRoot(); if (!MASK) buildUI(); if (!MASK) return; MASK.classList.add('on'); PANEL_OPEN = true; renderTabs(); renderPanelBody(); updateBadge(); }, 'openPanel'); }
   function closePanel() { safe(function () { if (MASK) MASK.classList.remove('on'); PANEL_OPEN = false; }, 'closePanel'); }
+  
   function renderPanelBody() {
     safe(function () {
       if (!PANEL) return; var body = PANEL.querySelector('#ma-body'); if (!body) return; var html = '';
@@ -356,7 +358,15 @@
     var pending = []; for (var pi = 0; pi < DB.pending.length; pi++) if (DB.pending[pi].status === 'pending') pending.push(DB.pending[pi]);
     if (!pending.length) return '<div class="ma-empty">暂无待审核记录</div>';
     pending.sort(function (a, b) { return (b.time || 0) - (a.time || 0); });
-    var h = '', actM = { add: '新增', delete: '删除', disable: '禁用', enable: '启用', move: '迁移' }, clsM = { add: 'add', delete: 'del', disable: 'dis', enable: 'en', move: 'mv' };
+    
+    var h = '';
+    // 批量审核按钮
+    h += '<div class="ma-row" style="justify-content:flex-end; margin-bottom:12px;">';
+    h += '<button class="ma-btn sm" id="ma-pending-reject-all" style="color:#e0355a; border-color:#ffb3c0;">全部拒绝</button>';
+    h += '<button class="ma-btn sm primary" id="ma-pending-approve-all">全部同意</button>';
+    h += '</div>';
+
+    var actM = { add: '新增', delete: '删除', disable: '禁用', enable: '启用', move: '迁移' }, clsM = { add: 'add', delete: 'del', disable: 'dis', enable: 'en', move: 'mv' };
     for (var i = 0; i < pending.length; i++) {
       var p = pending[i];
       h += '<div class="ma-pending-item" data-pid="' + esc(p.id) + '"><div class="ma-pending-top"><span class="ma-act-tag ' + (clsM[p.action] || '') + '">' + (actM[p.action] || p.action) + '</span><span class="ma-sender">来自 <b>' + esc(p.sender) + '</b> · ' + esc(fmtRelative(p.time)) + '</span></div><div class="ma-pending-text">' + esc(p.text) + '</div>';
@@ -372,8 +382,50 @@
     }
     return h;
   }
+  
   function bindPendingEvents(body) {
     safe(function () {
+      // 绑定批量操作
+      var btnAppAll = body.querySelector('#ma-pending-approve-all');
+      var btnRejAll = body.querySelector('#ma-pending-reject-all');
+      
+      if (btnAppAll) {
+        btnAppAll.addEventListener('click', function () {
+          safe(function () {
+            var cnt = 0;
+            // 使用 slice() 避免遍历时修改原数组导致错乱
+            var list = DB.pending.slice();
+            for (var i = 0; i < list.length; i++) {
+                var p = list[i];
+                if (p.status !== 'pending') continue;
+                // 批量时默认存入第一个分组（或者手动指定）
+                var targetGid = DB.groups.length > 0 ? DB.groups[0].id : '';
+                if (approvePending(p, targetGid)) cnt++;
+                DB.pending = DB.pending.filter(function (x) { return x.id !== p.id; });
+            }
+            saveData(); renderPanelBody(); updateBadge(); toast('已批量同意 ' + cnt + ' 条');
+          }, 'bulkApproveAll');
+        });
+      }
+
+      if (btnRejAll) {
+        btnRejAll.addEventListener('click', function () {
+          safe(function () {
+            var cnt = 0;
+            var list = DB.pending.slice();
+            for (var i = 0; i < list.length; i++) {
+                var p = list[i];
+                if (p.status !== 'pending') continue;
+                rejectPending(p);
+                DB.pending = DB.pending.filter(function (x) { return x.id !== p.id; });
+                cnt++;
+            }
+            saveData(); renderPanelBody(); updateBadge(); toast('已批量拒绝 ' + cnt + ' 条');
+          }, 'bulkRejectAll');
+        });
+      }
+
+      // 绑定单条审批
       eachNode(body, '.ma-pending-item', function (item) {
         var pid = item.getAttribute('data-pid'), p = null; for (var i = 0; i < DB.pending.length; i++) if (DB.pending[i].id === pid) { p = DB.pending[i]; break; } if (!p) return;
         var ab = item.querySelector('[data-pact="approve"]'), rb = item.querySelector('[data-pact="reject"]');
@@ -382,6 +434,7 @@
       });
     }, 'bindPendingEvents');
   }
+  
   function approvePending(p, targetGid) {
     if (!p) return false; var ok = false;
     if (p.action === 'add') { var g = targetGid ? findGroup(targetGid) : null; if (!g) { if (!DB.groups.length) { g = { id: uid('g'), name: '默认', disabledBy: [], cards: [] }; DB.groups.push(g); } else g = DB.groups[0]; } g.cards.push({ id: uid('c'), text: p.text, disabledBy: [], createdAt: Date.now() }); ok = true; }
@@ -408,8 +461,8 @@
     ensureOpenGroupsState();
     var h = '';
     h += '<div class="ma-set-block" style="background:#fafafa;">';
-    h += '<div style="font-size:12px;color:#666;margin-bottom:8px;">手动输入要添加的字卡内容，提交后进入待审核（发件人：我）</div>';
-    h += '<textarea class="ma-textarea" id="ma-manual-input" placeholder="输入字卡内容..."></textarea>';
+    h += '<div style="font-size:12px;color:#666;margin-bottom:8px;">手动输入要添加的字卡内容，支持回车换行批量提交（发件人：我）</div>';
+    h += '<textarea class="ma-textarea" id="ma-manual-input" placeholder="输入字卡内容，换行可批量添加..."></textarea>';
     h += '<div class="ma-row" style="margin-top:8px;margin-bottom:0;">';
     h += '<select class="ma-select" id="ma-manual-group" style="width:120px;">';
     for (var gi = 0; gi < DB.groups.length; gi++) h += '<option value="' + esc(DB.groups[gi].id) + '">' + esc(DB.groups[gi].name) + '</option>';
@@ -460,8 +513,15 @@
         subBtn.addEventListener('click', function () {
           safe(function () {
             var txt = String(manInput.value || '').trim(); if (!txt) { toast('请输入内容'); return; }
-            DB.pending.push({ id: uid('p'), action: 'add', text: txt, cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: manGroup ? manGroup.value : '', toGroupName: '', sender: SENDER_ME, auto: false, time: Date.now(), status: 'pending', note: '我手动提交的申请' });
-            saveData(); toast('已提交审核'); manInput.value = ''; renderPanelBody(); updateBadge();
+            // 支持换行批量提交
+            var lines = txt.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+            if (!lines.length) { toast('请输入有效内容'); return; }
+            
+            var gid = manGroup ? manGroup.value : '';
+            for (var i = 0; i < lines.length; i++) {
+                DB.pending.push({ id: uid('p'), action: 'add', text: lines[i], cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: gid, toGroupName: '', sender: SENDER_ME, auto: false, time: Date.now(), status: 'pending', note: '我手动提交的申请' });
+            }
+            saveData(); toast('已提交 ' + lines.length + ' 条审核'); manInput.value = ''; renderPanelBody(); updateBadge();
           }, 'manualSubmit');
         });
       }
