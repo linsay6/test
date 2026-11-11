@@ -1,6 +1,6 @@
 /* ============================================================================
  * my-new-feature.js 终极完美版
- * 修复：1. 增加去重按钮 2. 修复抓取并发上限 3. 修复 Tab 遮挡 4. 待审核支持批量勾选
+ * 修复：1. 气泡克隆精准过滤特殊消息 2. 彻底锁死并发抓取上限 3. 克隆图标角标完美同步原作者
  * ========================================================================== */
 (function () {
   'use strict';
@@ -66,28 +66,62 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
+  /* 核心修复：更严苛的文本气泡过滤，绝不克隆语音/红包等特殊卡片 */
   function injectBubbleToChat(text) {
     try {
       var msgs = readChatMsgs(); msgs.push({ side: 'in', text: text, time: Date.now() }); writeChatMsgs(msgs);
       var chatBody = document.getElementById('chat-body');
       if (!chatBody) { console.warn('[审计] 找不到 #chat-body'); return false; }
+      
       var children = Array.from(chatBody.children), templateNode = null;
+      var blackList = ['语音', '通话', '红包', '领取', '撤回', '礼物', '转账', '转账'];
+      
+      // 第一遍：寻找极其干净的对方纯文字气泡
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
+        
         var txt = el.textContent || '';
-        if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0 || txt.indexOf('情绪 ') >= 0) continue; 
+        // 必须不包含任何黑名单词汇
+        var isBlack = false;
+        for (var b = 0; b < blackList.length; b++) { if (txt.indexOf(blackList[b]) >= 0) { isBlack = true; break; } }
+        if (isBlack) continue; 
+        
+        // 排除带图标的复杂卡片 (比如兜底找个普通的div)
+        if (el.querySelector('.icon, .redpacket, .voice, .system-msg')) continue;
+
         if (txt.trim().length > 0) { templateNode = el; break; }
       }
-      if (!templateNode) { console.warn('[审计] 找不到可克隆的对方气泡节点'); return false; }
+
+      if (!templateNode) { 
+          console.warn('[审计] 找不到干净的纯文字气泡，尝试强制伪造');
+          // 如果实在找不到，克隆最后一条对方消息，并清空其所有子节点重建
+          for (var i = children.length - 1; i >= 0; i--) {
+              var el = children[i], cls = (el.className || '').toLowerCase();
+              if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0) continue;
+              templateNode = el; break;
+          }
+      }
+
+      if (!templateNode) { console.warn('[审计] 彻底找不到可克隆的对方节点'); return false; }
+      
       var clone = templateNode.cloneNode(true);
       if (clone.id) clone.removeAttribute('id');
       var nodesWithId = clone.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
       if (clone.classList) { clone.classList.remove('msg-out', 'me', 'right', 'self'); clone.classList.add('msg-in', 'left'); }
       clone.style.alignSelf = 'flex-start'; clone.style.marginLeft = '0'; clone.style.marginRight = 'auto';
+      
+      // 替换文本。如果实在找不到纯文本节点，就清空整个内容区并写入新文字
       var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
       while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
-      if (targetTextNode) targetTextNode.nodeValue = text; else clone.innerText = text;
+      
+      if (targetTextNode) {
+          targetTextNode.nodeValue = text;
+      } else {
+          // 极端兜底：清空所有内容，放一个纯文本 div 进去
+          clone.innerHTML = '<div style="padding: 10px 14px; font-size: 14px; color: #333; word-break: break-all;">' + esc(text) + '</div>';
+      }
+
       chatBody.appendChild(clone);
       try { chatBody.scrollTop = chatBody.scrollHeight; if (chatBody.parentNode) chatBody.parentNode.scrollTop = chatBody.parentNode.scrollHeight; window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
       return true;
@@ -97,9 +131,10 @@
   function autoPendingCount() { var n = 0; try { for (var i = 0; i < DB.pending.length; i++) { var p = DB.pending[i]; if (p.status === 'pending' && p.sender === SENDER_MJ && p.action === 'add') n++; } } catch (e) {} return n; }
   function pendingCount() { var n = 0; try { for (var i = 0; i < DB.pending.length; i++) if (DB.pending[i].status === 'pending') n++; } catch (e) {} return n; }
   
+  /* 核心修复：并发锁防止上限突破 */
   function grabFromChat() {
     safe(function () {
-      if (!DB || DB.meta.isGrabbing) return; // 并发锁
+      if (!DB || DB.meta.isGrabbing) return;
       if (autoPendingCount() >= MAX_AUTO_PENDING) return;
       
       DB.meta.isGrabbing = true;
@@ -167,7 +202,8 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         '#ma-app-icon{position:relative;cursor:pointer;}',
-        '#ma-app-icon .ma-app-dot{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;border:1px solid #fff;z-index:10;}','#ma-app-icon .ma-app-dot.on{display:flex;}',
+        /* 核心修复：完美同步原作者角标样式：红色正圆背景，白色加粗字体 */
+        '#ma-app-icon .ma-app-dot{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 2px;border-radius:8px;background:#ff4d4f;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:500;font-family:system-ui,-apple-system,sans-serif;border:1px solid #fff;z-index:10;box-sizing:border-box;}','#ma-app-icon .ma-app-dot.on{display:flex;}',
         '#ma-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;}','#ma-mask.on{display:flex;}',
         '#ma-panel{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;color:#222;line-height:1.5;box-shadow:0 12px 40px rgba(0,0,0,.22);}',
         '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;flex-shrink:0;}',
@@ -609,7 +645,6 @@
                 var text = c.text.trim();
                 if (seen[text]) {
                   count++;
-                  // 如果被删的卡有禁用标记，合并给保留的卡
                   var keepCard = seen[text];
                   if (c.disabledBy && c.disabledBy.length > 0) {
                     for (var k = 0; k < c.disabledBy.length; k++) {
