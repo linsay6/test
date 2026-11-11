@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（精准注入版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（精准控制位置版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -20,13 +20,15 @@
 
   var DEFAULT_SETTINGS = {
     color: '#6c8cff',
-    size: 56,         // 悬浮球大小，以及注入图标 app-ico 的大小
+    size: 56,
     image: '',
-    position: null,   // 悬浮球坐标
-    isHidden: false   // 是否隐藏悬浮球（不影响原生注入图标）
+    position: null,
+    isHidden: false,
+    iconPage: 0,   // 所在页索引，0 表示第一页
+    iconIndex: 0   // 插入位置索引，0 表示第一个
   };
 
-  // 救命后门：检测 URL 中是否含有 ?show_audit=true
+  // 救命后门
   var isForceShow = false;
   try {
     var searchParams = new URLSearchParams(window.location.search);
@@ -132,7 +134,9 @@
         position: (s.position && typeof s.position.x === 'number' && typeof s.position.y === 'number')
           ? { x: s.position.x, y: s.position.y }
           : null,
-        isHidden: !!s.isHidden
+        isHidden: !!s.isHidden,
+        iconPage: typeof s.iconPage === 'number' ? s.iconPage : DEFAULT_SETTINGS.iconPage,
+        iconIndex: typeof s.iconIndex === 'number' ? s.iconIndex : DEFAULT_SETTINGS.iconIndex
       };
     }
     return d;
@@ -174,7 +178,6 @@
    * 2. 样式
    * ===================================================================== */
   var CSS = [
-    /* ---------- 悬浮球 ---------- */
     '.mac-float-ball{position:fixed;z-index:2147483000;border-radius:50%;display:flex;align-items:center;',
     'justify-content:center;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none;',
     'box-shadow:none!important;border:none;outline:none;overflow:visible;background-size:cover;',
@@ -182,14 +185,11 @@
     '"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#fff;}',
     '.mac-float-ball .mac-ball-text{font-weight:700;line-height:1;pointer-events:none;letter-spacing:1px;}',
 
-    /* ---------- 角标 ---------- */
     '.mac-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;',
     'border-radius:9px;background:#ff3b30;color:#fff;font-size:11px;line-height:18px;text-align:center;',
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
     'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;z-index:10;}',
 
-    /* ---------- 原生图标精准注入样式 ---------- */
-    /* 强制覆盖掉原网页可能存在的阴影、边框，确保显示正常 */
     '.mac-injected-app .app-ico {',
     '  position: relative !important;',
     '  display: flex !important;',
@@ -201,7 +201,7 @@
     '  box-shadow: none !important;',
     '  border: none !important;',
     '  overflow: visible !important;',
-    '  border-radius: 20px !important;', /* 适配常见的 APP 图标圆角 */
+    '  border-radius: 20px !important;',
     '}',
     '.mac-injected-app .mac-native-text {',
     '  font-weight: bold;',
@@ -210,7 +210,6 @@
     '  transition: opacity .2s;',
     '}',
 
-    /* ---------- 面板 ---------- */
     '.mac-overlay{position:fixed;inset:0;background:rgba(15,20,35,.45);z-index:2147483600;display:none;',
     'align-items:center;justify-content:center;padding:16px;box-sizing:border-box;',
     'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
@@ -233,7 +232,6 @@
     '.mac-pane{display:none;padding:16px 18px 22px;}',
     '.mac-pane.is-active{display:block;}',
 
-    /* ---------- 通用控件 ---------- */
     '.mac-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;}',
     '.mac-input,.mac-textarea,.mac-select{border:1px solid #dde1ea;border-radius:10px;padding:8px 10px;',
     'font-size:13px;background:#fff;color:#1f2430;box-sizing:border-box;outline:none;font-family:inherit;}',
@@ -260,7 +258,6 @@
     '.mac-tip{font-size:13px;color:#4a5163;line-height:1.6;}',
     '.mac-check{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#4a5163;cursor:pointer;}',
 
-    /* ---------- 待审核 ---------- */
     '.mac-addbox{background:#f8f9fd;border:1px solid #eef0f5;border-radius:12px;padding:12px;}',
     '.mac-list{margin-top:12px;display:flex;flex-direction:column;gap:10px;}',
     '.mac-pending-item{border:1px solid #eef0f5;border-radius:12px;padding:10px 12px;background:#fff;}',
@@ -270,7 +267,6 @@
     '.mac-sender-meng{background:#eef0ff;color:#5a6bd8;}',
     '.mac-sender-me{background:#e9f7ef;color:#1f9d55;}',
 
-    /* ---------- 分类列表 ---------- */
     '.mac-cat-list{margin-top:12px;display:flex;flex-direction:column;gap:10px;}',
     '.mac-cat{border:1px solid #eef0f5;border-radius:12px;overflow:hidden;background:#fff;}',
     '.mac-cat-head{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f8f9fd;',
@@ -286,7 +282,6 @@
     '.mac-card:hover{background:#f4f6fb;}',
     '.mac-card-text{flex:1 1 auto;font-size:13px;line-height:1.5;word-break:break-word;color:#2b3142;}',
 
-    /* ---------- 设置 ---------- */
     '.mac-section{border:1px solid #eef0f5;border-radius:12px;padding:12px 14px;margin-bottom:12px;}',
     '.mac-section-title{font-size:13px;font-weight:700;color:#3a4152;margin-bottom:10px;}',
     '.mac-field{display:flex;align-items:center;gap:10px;font-size:13px;color:#4a5163;margin-bottom:10px;}',
@@ -294,7 +289,6 @@
     'background:#fff;padding:2px;cursor:pointer;}',
     '.mac-field input[type="range"]{flex:1 1 auto;min-width:100px;accent-color:#6c8cff;}',
 
-    /* ---------- 模态框 ---------- */
     '.mac-modal-overlay{position:fixed;inset:0;background:rgba(15,20,35,.5);z-index:2147483700;display:flex;',
     'align-items:center;justify-content:center;padding:16px;box-sizing:border-box;',
     'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
@@ -307,7 +301,6 @@
     '.mac-crop-canvas{border-radius:50%;touch-action:none;cursor:grab;background:#f2f4f8;max-width:100%;}',
     '.mac-crop-zoom{width:100%;accent-color:#6c8cff;}',
 
-    /* ---------- Toast ---------- */
     '.mac-toast{position:fixed;left:50%;bottom:64px;transform:translate(-50%,20px);background:rgba(30,36,52,.92);',
     'color:#fff;font-size:13px;padding:10px 18px;border-radius:10px;z-index:2147483800;opacity:0;',
     'pointer-events:none;transition:opacity .22s ease,transform .22s ease;max-width:80vw;text-align:center;',
@@ -391,7 +384,7 @@
   }
 
   /* =======================================================================
-   * 5. 图片裁剪（圆形预览）
+   * 5. 图片裁剪
    * ===================================================================== */
   function openCropModal(dataUrl, cb) {
     var V = 280;
@@ -515,12 +508,11 @@
   }
 
   /* =======================================================================
-   * 6. 入口：悬浮球与精准注入九宫格图标
+   * 6. 入口：悬浮球与注入图标
    * ===================================================================== */
   var ball = null;
   var hideBadge = false;
 
-  // 创建悬浮球
   function createBall() {
     if (ball) return;
     ball = document.createElement('div');
@@ -600,7 +592,6 @@
     }
   }
 
-  // 更新注入图标的外观
   function updateNativeIcon() {
     var node = document.querySelector('[data-app="mac-audit"]');
     if (!node) return;
@@ -609,8 +600,6 @@
     if (!ico || !text) return;
     
     var s = Store.data.settings;
-    
-    // 强制设定尺寸，避免原网页样式干扰
     ico.style.width = s.size + 'px';
     ico.style.height = s.size + 'px';
     
@@ -624,53 +613,60 @@
       ico.style.backgroundImage = 'none';
       ico.style.backgroundColor = s.color;
       text.style.opacity = '1';
-      text.style.color = '#ffffff'; // 简单处理，白字配深色底
+      text.style.color = '#ffffff';
     }
     text.style.fontSize = Math.round(s.size * 0.45) + 'px';
   }
 
-  // 寻找精准容器并注入
+  // 核心：动态位置注入逻辑（配合定时器守护）
   function tryInjectNativeIcon() {
     try {
-      var grid = document.querySelector('.app-grid.p3-grid');
-      if (!grid) return;
+      var grids = document.querySelectorAll('.app-grid.p3-grid');
+      if (!grids.length) return;
 
-      // 防止重复注入
-      if (grid.querySelector('[data-app="mac-audit"]')) {
-        updateNativeIcon();
-        updateBadges();
-        return;
+      var s = Store.data.settings;
+      // 边界保护
+      var pageIdx = Math.min(Math.max(s.iconPage || 0, 0), grids.length - 1);
+      var targetGrid = grids[pageIdx];
+      
+      var appNode = document.querySelector('[data-app="mac-audit"]');
+      
+      if (!appNode) {
+        appNode = document.createElement('div');
+        appNode.className = 'app mac-injected-app';
+        appNode.setAttribute('data-app', 'mac-audit');
+        appNode.innerHTML = `
+          <div class="app-ico">
+            <span class="mac-native-text">审</span>
+            <span class="mac-badge" data-role="ball-badge"></span>
+          </div>
+          <div class="app-name">审核</div>
+        `;
+        appNode.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          openPanel();
+        });
       }
 
-      // 创建完全符合你提供的 DOM 结构的元素
-      var appNode = document.createElement('div');
-      appNode.className = 'app mac-injected-app';
-      appNode.setAttribute('data-app', 'mac-audit');
-      
-      appNode.innerHTML = `
-        <div class="app-ico">
-          <span class="mac-native-text">审</span>
-          <span class="mac-badge" data-role="ball-badge"></span>
-        </div>
-        <div class="app-name">审核</div>
-      `;
-
-      appNode.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        openPanel();
+      // 计算插入位置（排除自身，防止死循环）
+      var targetIdx = s.iconIndex || 0;
+      var children = Array.prototype.slice.call(targetGrid.children).filter(function(el) {
+        return el !== appNode;
       });
-
-      grid.appendChild(appNode);
       
+      var refNode = children[targetIdx] || null;
+
+      // 只有在位置不对时才进行 DOM 操作，尽量不引起原网页重渲染
+      if (appNode.parentNode !== targetGrid || appNode.nextElementSibling !== refNode) {
+        targetGrid.insertBefore(appNode, refNode);
+      }
+
       updateNativeIcon();
       updateBadges();
-    } catch (e) {
-      /* 静默容错 */
-    }
+    } catch (e) {}
   }
 
-  // 更新角标 (悬浮球和原生图标共享)
   function updateBadges() {
     var n = Store.data.pending.length;
     var nodes = document.querySelectorAll('[data-role="ball-badge"]');
@@ -685,11 +681,9 @@
     }
   }
 
-  // 核心应用界面逻辑：处理显示与隐藏
   function applyEntryUI() {
     var s = Store.data.settings;
     
-    // 1. 悬浮球逻辑：受 isHidden 控制，但被 URL 后门强制覆盖
     if (ball) {
       var shouldShowBall = !s.isHidden || isForceShow;
       ball.style.display = shouldShowBall ? 'flex' : 'none';
@@ -704,9 +698,7 @@
       positionBall();
     }
 
-    // 2. 九宫格图标逻辑：永远显示，作为常驻入口
-    updateNativeIcon();
-    updateBadges();
+    tryInjectNativeIcon();
   }
 
   /* =======================================================================
@@ -866,6 +858,26 @@
                 '<button class="mac-btn" data-act="clear-img">清除图片</button>' +
               '</div>' +
               '<input type="file" accept="image/*" data-role="img-file" style="display:none">' +
+            '</div>' +
+
+            '<div class="mac-section">' +
+              '<div class="mac-section-title">九宫格图标位置控制</div>' +
+              '<div class="mac-field">' +
+                '<span>所在页</span>' +
+                '<select class="mac-select mac-select-sm" data-role="set-icon-page">' +
+                  '<option value="0">第 1 页</option>' +
+                  '<option value="1">第 2 页</option>' +
+                  '<option value="2">第 3 页</option>' +
+                  '<option value="3">第 4 页</option>' +
+                '</select>' +
+              '</div>' +
+              '<div class="mac-field">' +
+                '<span>第几个</span>' +
+                '<select class="mac-select mac-select-sm" data-role="set-icon-index"></select>' +
+              '</div>' +
+              '<div style="font-size:12px;color:#9aa1b2;line-height:1.5;">' +
+                '提示：原网页的装修模式无法拖拽此图标，请在此处修改，插件会自动强制将其插入到指定网格的对应位置。' +
+              '</div>' +
             '</div>' +
 
             '<div class="mac-section">' +
@@ -1041,10 +1053,24 @@
     var size = panelRoot.querySelector('[data-role="set-size"]');
     var sizeVal = panelRoot.querySelector('[data-role="size-val"]');
     var hidden = panelRoot.querySelector('[data-role="set-hidden"]');
+    var iconPage = panelRoot.querySelector('[data-role="set-icon-page"]');
+    var iconIndex = panelRoot.querySelector('[data-role="set-icon-index"]');
+    
     if (color) color.value = normalizeHex(s.color);
     if (size) size.value = s.size;
     if (sizeVal) sizeVal.textContent = s.size;
     if (hidden) hidden.checked = !!s.isHidden;
+    if (iconPage) iconPage.value = s.iconPage;
+    
+    if (iconIndex) {
+      // 动态生成第 1 到 15 个位置的选项
+      var opts = '';
+      for (var i = 1; i <= 15; i++) {
+        opts += '<option value="' + (i - 1) + '">第 ' + i + ' 个</option>';
+      }
+      iconIndex.innerHTML = opts;
+      iconIndex.value = s.iconIndex;
+    }
   }
 
   function renderManualCat() {
@@ -1115,6 +1141,18 @@
         Store.data.settings.isHidden = !!t.checked;
         Store.save();
         applyEntryUI();
+        return;
+      }
+      if (t.matches('[data-role="set-icon-page"]')) {
+        Store.data.settings.iconPage = parseInt(t.value, 10) || 0;
+        Store.save();
+        tryInjectNativeIcon();
+        return;
+      }
+      if (t.matches('[data-role="set-icon-index"]')) {
+        Store.data.settings.iconIndex = parseInt(t.value, 10) || 0;
+        Store.save();
+        tryInjectNativeIcon();
         return;
       }
       if (t.matches('[data-role="import-file"]')) {
@@ -1643,7 +1681,7 @@
       try { autoFetch(); } catch (e) {}
     }, FETCH_INTERVAL);
 
-    // 由于是 SPA，页面可能有延迟渲染，每 1.5 秒检查一次九宫格是否就绪
+    // 守护进程：每 1.5 秒检查原网页是否有网格，以及我们注入的元素是否被原网页重置，保证位置与存活
     setInterval(function () {
       try { tryInjectNativeIcon(); } catch (e) {}
     }, 1500);
