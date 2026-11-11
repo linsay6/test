@@ -403,7 +403,7 @@
   /* =======================================================================
    * 5. 核心：无刷新注入消息 (一键静默发送)
    * ===================================================================== */
-  function injectFakeMessage(text, side) {
+    function injectFakeMessage(text, side) {
     side = side || 'out';
     console.log('[梦角字卡] 🚀 触发一键静默发送...');
     
@@ -450,31 +450,69 @@
       console.log('[梦角字卡] 📡 已尝试派发 storage / chatUpdated / newMessage 事件。');
     } catch(e){}
 
-    // 3. DOM 兜底
+    // 3. DOM 兜底（智能寻找纯文本气泡）
     if (!rendered) {
-      var list = document.querySelector('.chat-msgs, .chat-list, #chat-body, .chat-content, [class*="msg-list"], [class*="chat-box"], [class*="message-list"]');
+      var list = document.querySelector('.chat-msgs, .chat-list, #chat-body, .chat-content, [class*="msg-list"], [class*="chat-box"], [class*="message-list"], [class*="msg-container"]');
       if (list) {
         var existingBubbles = list.querySelectorAll('.msg, .message, .bubble, [class*="msg"], [class*="bubble"]');
-        var bubble = existingBubbles.length > 0 ? existingBubbles[existingBubbles.length - 1].cloneNode(true) : document.createElement('div');
+        var bubble = null;
         
+        // 从后往前找，寻找最像“普通文本”的气泡模板（避开带图标、按钮、图片的特殊卡片）
+        for (var i = existingBubbles.length - 1; i >= 0; i--) {
+          var el = existingBubbles[i];
+          if (el.querySelector('img, svg, button')) continue; // 跳过特殊卡片
+          if (!el.textContent.trim()) continue; // 跳过空文本
+          
+          bubble = el.cloneNode(true);
+          break; // 找到了就跳出
+        }
+
+        if (!bubble) {
+          // 实在找不到，手动构造一个简易气泡（保持基本样式不崩坏）
+          bubble = document.createElement('div');
+          bubble.style.cssText = 'padding: 10px 14px; margin: 8px 0; border-radius: 12px; max-width: 80%; word-break: break-word; font-size: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);';
+          if (side === 'out') {
+            bubble.style.cssText += ' background: #6c8cff; color: #fff; margin-left: auto;';
+          } else {
+            bubble.style.cssText += ' background: #f2f4f8; color: #1f2430; margin-right: auto;';
+          }
+        }
+
+        // 清理克隆出来的气泡里的多余元素（防止它带有原本的图片占位符等）
+        var contentNode = bubble.querySelector('.content, .text, .msg-content') || bubble;
+        var children = contentNode.children;
+        for (var c = children.length - 1; c >= 0; c--) {
+           if (['IMG', 'SVG', 'BUTTON', 'I'].indexOf(children[c].tagName) !== -1) {
+             children[c].remove();
+           }
+        }
+        
+        // 替换文本内容，保留原网页的字体排版
         var textNodes = [];
         var walk = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT, null, false);
         var node;
         while(node = walk.nextNode()) { textNodes.push(node); }
+        
         if (textNodes.length > 0) {
           textNodes[0].nodeValue = text;
-          for(var i=1; i<textNodes.length; i++) textNodes[i].nodeValue = '';
-        } else { bubble.textContent = text; }
-        
+          for(var j=1; j<textNodes.length; j++) textNodes[j].nodeValue = '';
+        } else {
+          var span = document.createElement('span');
+          span.textContent = text;
+          contentNode.appendChild(span);
+        }
+
+        // 确保左右对齐 class 正确
         bubble.removeAttribute('id');
         if (side === 'out') { bubble.classList.add('out', 'right', 'self', 'is-me'); bubble.classList.remove('in', 'left', 'other', 'is-other'); }
         else { bubble.classList.add('in', 'left', 'other', 'is-other'); bubble.classList.remove('out', 'right', 'self', 'is-me'); }
-        
+
         list.appendChild(bubble);
         var scrollTarget = list.closest('[style*="overflow"]') || list.parentElement || list;
         scrollTarget.scrollTop = scrollTarget.scrollHeight;
-        console.log('[梦角字卡] ⚠️ 未找到全局函数，已通过 DOM 劫持克隆插入气泡并滚动到底部。');
-        toast('已通过 DOM 兜底方案插入消息');
+        
+        console.log('[梦角字卡] ⚠️ 未找到全局函数，已通过智能 DOM 劫持插入文本气泡。');
+        toast('已通过智能兜底方案插入消息');
       } else {
         console.warn('[梦角字卡] ❌ 更新失败：未找到全局函数，也未找到聊天列表容器。');
         toast('刷新失败，详见控制台');
