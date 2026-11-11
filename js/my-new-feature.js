@@ -403,7 +403,7 @@
   /* =======================================================================
    * 5. 核心：无刷新注入消息 (一键静默发送)
    * ===================================================================== */
-      function injectFakeMessage(text, side) {
+        function injectFakeMessage(text, side) {
     side = side || 'out';
     console.log('[梦角字卡] 🚀 触发一键静默发送...');
     
@@ -450,157 +450,92 @@
       console.log('[梦角字卡] 📡 已尝试派发 storage / chatUpdated / newMessage 事件。');
     } catch(e){}
 
-    // 3. DOM 兜底（智能寻找包裹层并深度清洗）
+    // 3. DOM 兜底（保持最纯粹的结构克隆，绝不删骨架元素）
     if (!rendered) {
       var list = document.querySelector('.chat-msgs, .chat-list, #chat-body, .chat-content, [class*="msg-list"], [class*="chat-box"], [class*="message-list"], [class*="msg-container"]');
       
-      if (list) {
-        // 尝试获取列表中所有的消息行
-        var rows = Array.from(list.children).filter(function(el) { 
-            return !el.hasAttribute('data-mac-injected') && el.textContent.trim().length > 0; 
-        });
-        
-        var bubble = null;
-        
-        // 从最近的消息里找模板，优先找带 img 的（通常是完整行）
-        for (var i = rows.length - 1; i >= 0; i--) {
-          var row = rows[i];
-          if (row.querySelector('img, svg, .avatar, [class*="avatar"]')) {
-            bubble = row.cloneNode(true);
-            break;
-          }
-        }
-        
-        // 如果没找到带图标的，用最后一条文本
-        if (!bubble && rows.length > 0) {
-          bubble = rows[rows.length - 1].cloneNode(true);
-        }
-
-        if (bubble) {
-          bubble.setAttribute('data-mac-injected', 'true');
-          bubble.removeAttribute('id');
-          var withIds = bubble.querySelectorAll('[id]');
-          for(var j=0; j<withIds.length; j++) withIds[j].removeAttribute('id');
-
-          // --- 核心：清理杂质，寻找头像与文本区 ---
-          var avatarImg = null;
-          var badIcons = bubble.querySelectorAll('img, svg, button, i');
-          
-          for (var k = 0; k < badIcons.length; k++) {
-             var el = badIcons[k];
-             // 如果它或它的父级带有 avatar 类名，认定为头像，保留
-             if (el.className && /avatar/i.test(el.className)) {
-                 avatarImg = el;
-             } else if (el.parentElement && el.parentElement.className && /avatar/i.test(el.parentElement.className)) {
-                 avatarImg = el;
-             } else if (el.tagName === 'IMG' && !avatarImg) {
-                 // 如果还没找到头像，且遇到了唯一一个 img，把它当头像
-                 avatarImg = el;
-             } else {
-                 // 否则视为气泡里的杂质（小红心、小方块、已读状态等），直接删掉
-                 el.remove();
-             }
-          }
-
-          // 替换文本节点
-          var textNodes = [];
-          var walk = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT, null, false);
-          var node;
-          while(node = walk.nextNode()) { textNodes.push(node); }
-          
-          if (textNodes.length > 0) {
-            // 找到最长的文本节点替换内容
-            var targetNode = textNodes[0];
-            var maxLen = 0;
-            for(var t=0; t<textNodes.length; t++) {
-               var len = textNodes[t].nodeValue.trim().length;
-               if (len > maxLen) { maxLen = len; targetNode = textNodes[t]; }
+      if (list && list.children.length > 0) {
+        // 找最合适克隆的行（从后往前找，避开系统通知如“撤回”、“通话”）
+        var row = null;
+        for (var i = list.children.length - 1; i >= 0; i--) {
+            var el = list.children[i];
+            if (el.hasAttribute('data-mac-injected')) continue;
+            if (el.textContent.indexOf('通话') > -1 || el.textContent.indexOf('撤回') > -1) continue;
+            if (el.textContent.trim().length > 0) {
+                row = el; break;
             }
-            targetNode.nodeValue = text;
-            for(var j=0; j<textNodes.length; j++) {
-              if (textNodes[j] !== targetNode) textNodes[j].nodeValue = ''; // 清空其他杂乱文本
+        }
+        // 实在不行就取最后一行
+        if (!row) row = list.lastElementChild;
+
+        var bubble = row.cloneNode(true);
+        bubble.setAttribute('data-mac-injected', 'true');
+        bubble.removeAttribute('id');
+        var withIds = bubble.querySelectorAll('[id]');
+        for(var j=0; j<withIds.length; j++) withIds[j].removeAttribute('id');
+
+        // 获取当前时间字符串 (HH:MM)
+        var nowTime = new Date();
+        var timeStr = String(nowTime.getHours()).padStart(2, '0') + ':' + String(nowTime.getMinutes()).padStart(2, '0');
+
+        // 精准替换文本节点，保留图片和结构
+        var textNodes = [];
+        var walk = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT, null, false);
+        var node;
+        while(node = walk.nextNode()) { textNodes.push(node); }
+        
+        var replacedMain = false;
+        for (var t = 0; t < textNodes.length; t++) {
+           var n = textNodes[t];
+           var val = n.nodeValue.trim();
+           if (!val) continue;
+           
+           // 如果看起来像时间 (如 12:34)，更新为当前时间
+           if (/^\d{1,2}:\d{2}/.test(val)) {
+               n.nodeValue = n.nodeValue.replace(val, timeStr);
+           } 
+           // 把最长的文本或者还没被替换的普通文本，替换为我们的内容
+           else if (val.length > 2 && !replacedMain && !/^[\d\s:]+$/.test(val)) {
+               n.nodeValue = text;
+               replacedMain = true;
+           }
+        }
+
+        // 如果实在没找到文本节点，或者没替换成功，直接塞进最内层元素
+        if (!replacedMain) {
+            var contentBox = bubble.querySelector('[class*="content"], [class*="text"], [class*="bubble"]');
+            if (contentBox && contentBox !== bubble) {
+                contentBox.textContent = text;
+            } else {
+                bubble.appendChild(document.createTextNode(text));
             }
-          } else {
-            var span = document.createElement('span');
-            span.textContent = text;
-            bubble.appendChild(span);
-          }
+        }
 
-          // --- 修复缺失的头像 ---
-          if (side === 'in' && !avatarImg) {
-              var existingAv = list.querySelector('img, [class*="avatar"] img');
-              if (existingAv) {
-                  var newAv = existingAv.cloneNode(true);
-                  newAv.style.width = '36px';
-                  newAv.style.height = '36px';
-                  newAv.style.borderRadius = '50%';
-                  newAv.style.marginRight = '10px';
-                  newAv.style.flexShrink = '0';
-                  if (window.getComputedStyle(bubble).display !== 'flex') {
-                      bubble.style.display = 'flex';
-                      bubble.style.alignItems = 'flex-start';
-                  }
-                  bubble.insertBefore(newAv, bubble.firstChild);
-              }
-          }
-
-          // 调整左右对齐
-          if (side === 'out') { 
+        // 强制调整左右对齐
+        if (side === 'out') { 
             bubble.classList.add('out', 'right', 'self', 'is-me'); 
             bubble.classList.remove('in', 'left', 'other', 'is-other'); 
-          } else { 
+            bubble.style.alignSelf = 'flex-end';
+            bubble.style.justifyContent = 'flex-end';
+            if (window.getComputedStyle(bubble).display === 'flex') {
+                bubble.style.flexDirection = 'row-reverse';
+            }
+        } else { 
             bubble.classList.add('in', 'left', 'other', 'is-other'); 
             bubble.classList.remove('out', 'right', 'self', 'is-me'); 
-          }
-
-          // 隐藏时间戳（如果克隆过来的带有旧的时间）
-          var timeEls = bubble.querySelectorAll('[class*="time"], [class*="date"]');
-          for(var tm=0; tm<timeEls.length; tm++) timeEls[tm].style.display = 'none';
-
-          list.appendChild(bubble);
-          
-          var scrollTarget = list.closest('[style*="overflow"]') || list.parentElement || list;
-          scrollTarget.scrollTop = scrollTarget.scrollHeight;
-          
-          console.log('[梦角字卡] ⚠️ 未找到全局函数，已通过深度克隆清洗插入消息。');
-          toast('已通过深度克隆插入消息');
-        } else {
-          // 极端兜底：手动构建一个极其标准的带头像气泡
-          var wrap = document.createElement('div');
-          wrap.style.cssText = 'display:flex; align-items:flex-start; margin: 10px 0;';
-          wrap.setAttribute('data-mac-injected', 'true');
-          
-          if (side === 'in') {
-            var defaultAv = list.querySelector('img');
-            if (defaultAv) {
-                var av = defaultAv.cloneNode(true);
-                av.style.cssText = 'width:36px;height:36px;border-radius:50%;margin-right:10px;flex-shrink:0;';
-                wrap.appendChild(av);
-            } else {
-                var avDiv = document.createElement('div');
-                avDiv.style.cssText = 'width:36px;height:36px;border-radius:50%;margin-right:10px;background:#ccc;flex-shrink:0;';
-                wrap.appendChild(avDiv);
+            bubble.style.alignSelf = 'flex-start';
+            bubble.style.justifyContent = 'flex-start';
+            if (window.getComputedStyle(bubble).display === 'flex') {
+                bubble.style.flexDirection = 'row';
             }
-          }
-          
-          var bub = document.createElement('div');
-          bub.style.cssText = 'padding:10px 14px;border-radius:12px;max-width:80%;word-break:break-word;font-size:14px;box-shadow:0 1px 2px rgba(0,0,0,0.05);';
-          if (side === 'out') {
-            bub.style.background = '#6c8cff';
-            bub.style.color = '#fff';
-            wrap.style.justifyContent = 'flex-end';
-          } else {
-            bub.style.background = '#f2f4f8';
-            bub.style.color = '#1f2430';
-          }
-          bub.textContent = text;
-          wrap.appendChild(bub);
-          
-          list.appendChild(wrap);
-          var scrollTarget = list.closest('[style*="overflow"]') || list.parentElement || list;
-          scrollTarget.scrollTop = scrollTarget.scrollHeight;
-          toast('已通过基础兜底插入消息');
         }
+
+        list.appendChild(bubble);
+        var scrollTarget = list.closest('[style*="overflow"]') || list.parentElement || list;
+        scrollTarget.scrollTop = scrollTarget.scrollHeight;
+        
+        console.log('[梦角字卡] ⚠️ 未找到全局函数，已通过极简克隆插入消息。');
+        toast('已通过极简克隆插入消息');
       } else {
         console.warn('[梦角字卡] ❌ 更新失败：未找到全局函数，也未找到聊天列表容器。');
         toast('刷新失败，详见控制台');
