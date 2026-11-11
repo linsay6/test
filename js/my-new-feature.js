@@ -1,1599 +1,1809 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）自动字卡系统 - 最终美化与融合版
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版
+ * 全部数据存放于 localStorage['my-audit-cards']
  * ========================================================================= */
 (function () {
   'use strict';
 
-  if (window.__CARD_AUDIT_UI__) return;
-  window.__CARD_AUDIT_UI__ = true;
+  if (window.__MY_NEW_FEATURE_LOADED__) return;
+  window.__MY_NEW_FEATURE_LOADED__ = true;
 
-  /* =====================================================================
-   * 0. 配置
-   * =================================================================== */
-  const STORAGE_KEY   = 'my-audit-cards';
-  const CHAT_MSGS_KEY = 'xy-home-v2:default:chat-msgs';
-  const TARGET_CARD_KEY = 'xy-home-v2:default:chatcard-tail';
-  const DEFAULT_CATS  = ['主谓宾', '标点', '量词', '形容词', '虚词', '未分类'];
-  const FALLBACK_CAT  = '未分类';
-  const DEFAULT_USER  = '梦角'; 
+  /* =======================================================================
+   * 0. 常量与工具
+   * ===================================================================== */
+  var LS_KEY = 'my-audit-cards';
+  var CHAT_KEY = 'xy-home-v2:default:chat-msgs';
+  var MAX_PENDING = 5;               // 待审核最多积压条数
+  var FETCH_INTERVAL = 10 * 60 * 1000; // 10 分钟
+  var FETCH_PROBABILITY = 0.9;       // Math.random() > 0.9 时触发（10%）
+  var DEFAULT_CATEGORY = '未分类';
 
-  const TICK_MS       = 10 * 60 * 1000; 
-  const GRAB_PROB     = 0.1;            
-  const MAX_PENDING   = 5;              
-  const RECENT_MS     = 10 * 60 * 1000; 
-  const MIN_LEN       = 5;              
-  const MAX_LEN       = 30;             
+  var DEFAULT_SETTINGS = {
+    color: '#6c8cff',
+    size: 56,
+    image: '',
+    position: null,   // {x, y} 屏幕坐标（左上角）；null 表示默认右下角
+    isHidden: false
+  };
 
-  /* =====================================================================
-   * 1. 基础工具函数
-   * =================================================================== */
   function uid() {
-    return 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  var escAttr = esc;
+  function normalizeHex(v) {
+    return /^#[0-9a-fA-F]{6}$/.test(String(v || '')) ? String(v) : '#6c8cff';
+  }
+  function ready(fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once: true });
+    } else {
+      fn();
+    }
   }
 
-  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
-
-  function fmtTime(ts) {
-    if (typeof ts !== 'number' || !isFinite(ts)) return '';
-    const d = new Date(ts);
-    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
-      ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  /* =======================================================================
+   * 1. 数据层
+   * ===================================================================== */
+  function normalizeCard(item) {
+    if (!item) return null;
+    if (typeof item === 'string') {
+      var t = item.trim();
+      return t ? { id: uid(), text: t } : null;
+    }
+    if (typeof item === 'object') {
+      var text = String(item.text != null ? item.text : (item.content || '')).trim();
+      if (!text) return null;
+      return { id: String(item.id || uid()), text: text };
+    }
+    return null;
   }
 
-  function countChars(s) {
-    return Array.from(String(s)).length;
-  }
-
-  /* =====================================================================
-   * 2. 存储层
-   * =================================================================== */
-  function makeEmptyStore() {
-    const categories = {};
-    DEFAULT_CATS.forEach(function (c) { categories[c] = []; });
-    return { 
-      categories: categories, 
-      categoryOrder: [...DEFAULT_CATS],
-      pending: [] 
+  function normalizePending(item) {
+    if (typeof item === 'string') {
+      var t0 = item.trim();
+      return t0 ? { id: uid(), text: t0, category: DEFAULT_CATEGORY, sender: '我' } : null;
+    }
+    if (!item || typeof item !== 'object') return null;
+    var text = String(item.text || '').trim();
+    if (!text) return null;
+    return {
+      id: String(item.id || uid()),
+      text: text,
+      category: String(item.category || DEFAULT_CATEGORY),
+      sender: item.sender === '梦角' ? '梦角' : '我'
     };
   }
 
-  function normalizeStore(raw) {
-    const out = makeEmptyStore();
-    if (!raw || typeof raw !== 'object') return out;
+  /** 把任意来源的原始对象整理成合法数据结构 */
+  function normalizeData(parsed) {
+    var d = {
+      categories: {},
+      categoryOrder: [],
+      pending: [],
+      settings: Object.assign({}, DEFAULT_SETTINGS)
+    };
+    if (!parsed || typeof parsed !== 'object') return d;
 
-    if (raw.categories && typeof raw.categories === 'object') {
-      DEFAULT_CATS.forEach(function (c) {
-        if (!Array.isArray(raw.categories[c])) raw.categories[c] = [];
-      });
-      Object.keys(raw.categories).forEach(function (name) {
-        const arr = raw.categories[name];
-        if (!Array.isArray(arr)) { out.categories[name] = []; return; }
-        out.categories[name] = arr
-          .filter(function (x) { return x && typeof x.text === 'string' && x.text.trim(); })
-          .map(function (x) {
-            let u = typeof x.user === 'string' ? x.user : DEFAULT_USER;
-            if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER;
-            return {
-              id: typeof x.id === 'string' ? x.id : uid(),
-              text: String(x.text),
-              user: u,
-              createdAt: typeof x.createdAt === 'number' ? x.createdAt : Date.now(),
-              approvedAt: typeof x.approvedAt === 'number' ? x.approvedAt : Date.now()
-            };
-          });
+    if (parsed.categories && typeof parsed.categories === 'object' && !Array.isArray(parsed.categories)) {
+      Object.keys(parsed.categories).forEach(function (name) {
+        var list = parsed.categories[name];
+        if (!Array.isArray(list)) return;
+        d.categories[name] = list.map(normalizeCard).filter(Boolean);
       });
     }
 
-    if (Array.isArray(raw.categoryOrder)) {
-      out.categoryOrder = raw.categoryOrder.filter(c => out.categories[c]);
-      Object.keys(out.categories).forEach(c => {
-        if (!out.categoryOrder.includes(c)) out.categoryOrder.push(c);
-      });
-    } else {
-      out.categoryOrder = Object.keys(out.categories);
+    if (Array.isArray(parsed.pending)) {
+      d.pending = parsed.pending.map(normalizePending).filter(Boolean);
     }
 
-    if (Array.isArray(raw.pending)) {
-      out.pending = raw.pending
-        .filter(function (x) { return x && typeof x.text === 'string' && x.text.trim(); })
-        .map(function (x) {
-          let cat = typeof x.category === 'string' ? x.category : FALLBACK_CAT;
-          if (!out.categories[cat]) cat = FALLBACK_CAT;
-          let u = typeof x.user === 'string' ? x.user : DEFAULT_USER;
-          if (u === '字卡库' || u === '自动抓取' || u === '我') u = DEFAULT_USER;
-          return {
-            id: typeof x.id === 'string' ? x.id : uid(),
-            text: String(x.text),
-            user: u,
-            category: cat,
-            createdAt: typeof x.createdAt === 'number' ? x.createdAt : Date.now()
-          };
-        })
-        .slice(0, MAX_PENDING);
-    }
-    return out;
-  }
-
-  function readStore() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw == null) return null;
-      return normalizeStore(JSON.parse(raw));
-    } catch (e) { return null; }
-  }
-
-  function writeStore(s) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
-  }
-
-  let store = makeEmptyStore();
-
-  function loadStore() {
-    const loaded = readStore();
-    if (loaded === null) {
-      store = makeEmptyStore();
-      writeStore(store);
-    } else {
-      store = loaded;
-    }
-    return store;
-  }
-
-  function existsText(text) {
-    const t = String(text).trim();
-    if (!t) return true;
-    const names = Object.keys(store.categories);
-    for (let i = 0; i < names.length; i++) {
-      const arr = store.categories[names[i]];
-      for (let j = 0; j < arr.length; j++) {
-        if (arr[j].text.trim() === t) return true;
-      }
-    }
-    for (let i = 0; i < store.pending.length; i++) {
-      if (store.pending[i].text.trim() === t) return true;
-    }
-    return false;
-  }
-
-  /* =====================================================================
-   * 3. 样式注入
-   * =================================================================== */
-  const CSS = `
-  /* 悬浮按钮基础 */
-  .ca-fab {
-    position: fixed; right: 24px; bottom: 24px; width: 64px; height: 64px;
-    border: none; border-radius: 50%; cursor: pointer; color: #fff;
-    font-size: 15px; font-weight: 600; letter-spacing: 1px; font-family: inherit;
-    background: linear-gradient(135deg, #4f8cff 0%, #2f6bff 100%);
-    box-shadow: 0 8px 24px rgba(47, 107, 255, 0.45); z-index: 99998;
-    transition: transform .18s ease, box-shadow .18s ease, background .2s;
-    -webkit-tap-highlight-color: transparent;
-    display: flex; align-items: center; justify-content: center;
-    user-select: none; touch-action: none; background-clip: padding-box;
-  }
-  .ca-fab:hover { transform: scale(1.05); box-shadow: 0 12px 30px rgba(47, 107, 255, 0.55); }
-  .ca-fab:active { transform: scale(0.95); }
-  .ca-fab-label { pointer-events: none; }
-  
-  /* 悬浮按钮上的小关闭按钮 */
-  .ca-fab-hide-btn {
-    position: absolute; top: -6px; right: -6px; width: 18px; height: 18px;
-    border-radius: 50%; background: #fff; color: #999; border: 1px solid #ddd;
-    font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center;
-    cursor: pointer; z-index: 10; transition: all .2s; box-sizing: border-box;
-  }
-  .ca-fab-hide-btn:hover { background: #fee; color: #f00; border-color: #fcc; }
-
-  /* 红色数字角标 */
-  .ca-fab-badge {
-    position: absolute; top: -2px; left: -2px; min-width: 20px; height: 20px; padding: 0 6px;
-    box-sizing: border-box; display: none; align-items: center; justify-content: center;
-    border-radius: 10px; background: #ff3b3b; color: #fff; font-size: 12px; font-weight: 700;
-    font-variant-numeric: tabular-nums; border: 2px solid #fff; box-shadow: 0 2px 8px rgba(255, 59, 59, 0.5);
-    pointer-events: none;
-  }
-
-  /* 恢复按钮 */
-  .ca-restore-btn {
-    position: fixed; right: 0; bottom: 30%; width: 12px; height: 60px;
-    background: rgba(0,0,0,0.08); border-radius: 8px 0 0 8px;
-    cursor: pointer; z-index: 99997; display: none; transition: background .2s;
-  }
-  .ca-restore-btn:hover { background: rgba(0,0,0,0.3); }
-
-  /* 遮罩与弹窗 */
-  .ca-overlay {
-    position: fixed; inset: 0; z-index: 99999; display: flex; align-items: center; justify-content: center;
-    padding: 20px; box-sizing: border-box; background: rgba(0, 0, 0, 0.55);
-    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
-    opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility .22s ease;
-  }
-  .ca-overlay.is-open { opacity: 1; visibility: visible; }
-
-  .ca-modal {
-    width: min(720px, 100%); max-height: min(88vh, 820px); display: flex; flex-direction: column;
-    background: #fff; border-radius: 18px; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35); overflow: hidden;
-    color: #1f2430; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    transform: translateY(14px) scale(0.96); opacity: 0; transition: transform .26s cubic-bezier(.2, .8, .3, 1), opacity .26s ease;
-  }
-  .ca-overlay.is-open .ca-modal { transform: none; opacity: 1; }
-
-  .ca-header {
-    flex: none; display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 12px; padding: 20px 24px 16px; border-bottom: 1px solid #eef0f4;
-  }
-  .ca-title { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .5px; }
-  .ca-subtitle { margin: 5px 0 0; font-size: 12px; color: #8a90a2; }
-  .ca-close {
-    flex: none; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
-    border: none; border-radius: 50%; background: #f2f4f8; color: #6b7280; font-size: 20px;
-    cursor: pointer; transition: background .15s ease, color .15s ease;
-  }
-  .ca-close:hover { background: #e6e9f0; color: #1f2430; }
-
-  .ca-body {
-    flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 24px; -webkit-overflow-scrolling: touch;
-  }
-  .ca-body::-webkit-scrollbar { width: 8px; }
-  .ca-body::-webkit-scrollbar-thumb { background: #dfe3ec; border-radius: 4px; }
-
-  .ca-section + .ca-section { margin-top: 22px; padding-top: 20px; border-top: 1px dashed #e8ebf1; }
-  .ca-section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-  .ca-h3 { margin: 0; font-size: 14px; font-weight: 600; color: #3b4252; }
-  .ca-badge {
-    min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box;
-    display: inline-flex; align-items: center; justify-content: center; border-radius: 10px;
-    background: #ff5a5f; color: #fff; font-size: 12px; font-weight: 600;
-  }
-  .ca-hint { margin-left: auto; font-size: 12px; color: #a0a6b5; }
-
-  .ca-head-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .ca-text-btn {
-    padding: 4px 10px; border: 1px solid #dfe3ec; border-radius: 6px; background: #fff;
-    font-size: 12px; color: #4a5060; cursor: pointer; transition: all .15s ease;
-  }
-  .ca-text-btn:hover { background: #f0f5ff; border-color: #c7d7ff; color: #2f6bff; }
-
-  .ca-form { display: flex; gap: 8px; flex-wrap: wrap; }
-  .ca-input {
-    flex: 1 1 220px; min-width: 0; padding: 9px 12px; border: 1px solid #dfe3ec; border-radius: 8px;
-    font-size: 13px; font-family: inherit; color: #1f2430; outline: none; transition: border-color .16s ease;
-  }
-  .ca-input:focus { border-color: #2f6bff; box-shadow: 0 0 0 3px rgba(47, 107, 255, .15); }
-  
-  .ca-select, .ca-select-sm {
-    padding: 9px 12px; border: 1px solid #dfe3ec; border-radius: 8px; font-size: 13px;
-    font-family: inherit; color: #1f2430; outline: none; cursor: pointer;
-  }
-  .ca-select-sm { padding: 5px 8px; font-size: 12px; }
-
-  .ca-btn-primary {
-    padding: 9px 18px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
-    font-family: inherit; color: #fff; cursor: pointer; background: linear-gradient(135deg, #4f8cff, #2f6bff);
-    transition: filter .16s ease, transform .16s ease;
-  }
-  .ca-btn-primary:hover { filter: brightness(1.05); }
-  .ca-btn-primary:active { transform: scale(.97); }
-
-  .ca-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-  .ca-item {
-    display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #eceff5;
-    border-radius: 12px; background: #fafbfd; transition: background .18s ease;
-  }
-  .ca-item:hover { background: #f6f9ff; border-color: #d7e0f5; }
-  .ca-item-main { flex: 1; min-width: 0; }
-  
-  .ca-item-title { font-size: 14px; line-height: 1.5; word-break: break-word; }
-  .ca-card-text { color: #2f6bff; font-weight: 600; }
-  .ca-item-meta { margin-top: 4px; font-size: 12px; color: #8a90a2; }
-  .ca-item-cat { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
-  .ca-cat-label { font-size: 12px; color: #8a90a2; }
-
-  .ca-actions { flex: none; display: flex; gap: 8px; }
-  .ca-btn {
-    padding: 7px 14px; border: 1px solid transparent; border-radius: 8px; font-size: 13px;
-    font-weight: 600; font-family: inherit; cursor: pointer; transition: all .16s ease;
-  }
-  .ca-btn-ok { background: #2f6bff; color: #fff; }
-  .ca-btn-ok:hover { background: #1f56e0; }
-  .ca-btn-no { background: #fff; color: #6b7280; border-color: #dfe3ec; }
-  .ca-btn-no:hover { background: #fff1f1; border-color: #ffc9c9; color: #e5484d; }
-
-  .ca-empty {
-    padding: 22px 12px; text-align: center; font-size: 13px; color: #a0a6b5;
-    border: 1px dashed #e2e7f0; border-radius: 12px; background: #fbfcfe; list-style: none;
-  }
-
-  .ca-cats { display: flex; flex-direction: column; gap: 8px; }
-  .ca-cat-row {
-    border: 1px solid #eceff5; border-radius: 12px; background: #fff; overflow: hidden;
-    transition: border-color .16s ease, box-shadow .16s ease;
-  }
-  .ca-cat-row:hover { border-color: #d7e0f5; }
-  .ca-cat-row.dragging { opacity: 0.5; border: 1px dashed #2f6bff; }
-  .ca-cat-row.drag-over { border-top: 2px solid #2f6bff; }
-  
-  .ca-cat {
-    width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 14px;
-    font-size: 13px; color: #3b4252; cursor: grab; transition: background .16s ease;
-  }
-  .ca-cat:active { cursor: grabbing; }
-  .ca-cat:hover { background: #f5f9ff; }
-  .ca-cat-arrow { width: 12px; flex: none; color: #9aa1b2; font-size: 11px; }
-  .ca-cat-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ca-cat-count {
-    flex: none; padding: 1px 8px; border-radius: 10px; background: #eef1f7;
-    font-size: 12px; color: #6b7280;
-  }
-  
-  .ca-cat-ops {
-    flex: none; display: flex; gap: 4px; margin-left: 8px; opacity: 0.3; transition: opacity .16s ease;
-  }
-  .ca-cat:hover .ca-cat-ops { opacity: 1; }
-  .ca-cat-op-btn {
-    padding: 2px 6px; border: 1px solid transparent; border-radius: 4px; background: transparent;
-    color: #8a90a2; font-size: 12px; cursor: pointer; transition: all .16s ease;
-  }
-  .ca-cat-op-btn:hover { background: #e6e9f0; color: #2f6bff; }
-  .ca-cat-op-btn.del:hover { background: #fff1f1; color: #e5484d; }
-
-  .ca-cat-row.is-active { border-color: #c7d7ff; box-shadow: 0 0 0 3px rgba(47, 107, 255, .08); }
-  .ca-cat-row.is-active .ca-cat-name { color: #2f6bff; }
-
-  .ca-cards-box {
-    padding: 8px 14px 12px; border-top: 1px dashed #edf0f6;
-    display: flex; flex-direction: column; gap: 6px; background: #fbfcfe;
-  }
-  .ca-batch-header {
-    display: flex; align-items: center; gap: 8px; padding: 4px 0;
-    font-size: 12px; color: #6b7280; border-bottom: 1px dashed #e8ebf1; margin-bottom: 4px;
-  }
-  .ca-batch-header label { cursor: pointer; display: flex; align-items: center; gap: 6px; }
-  
-  .ca-card {
-    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
-    border-radius: 8px; background: #fff; border: 1px solid #f0f2f7;
-  }
-  .ca-card-cb { cursor: pointer; width: 14px; height: 14px; accent-color: #2f6bff; }
-  .ca-card-txt { flex: 1; min-width: 0; font-size: 13px; color: #2b3140; word-break: break-word; }
-  .ca-card-ops { flex: none; display: flex; gap: 6px; }
-  
-  .ca-mini-btn {
-    padding: 4px 10px; border: 1px solid #dfe3ec; border-radius: 6px; background: #fff;
-    font-size: 12px; font-family: inherit; color: #4a5060; cursor: pointer; transition: all .15s ease;
-  }
-  .ca-mini-btn:hover { background: #f0f5ff; border-color: #c7d7ff; color: #2f6bff; }
-  .ca-mini-danger:hover { background: #fff1f1; border-color: #ffc9c9; color: #e5484d; }
-
-  .ca-batch-footer {
-    margin-top: 6px; padding-top: 10px; border-top: 1px dashed #e8ebf1; display: flex; justify-content: flex-end; gap: 8px;
-  }
-  .ca-btn-danger {
-    padding: 7px 14px; border: none; border-radius: 8px; font-size: 12px;
-    font-weight: 600; font-family: inherit; color: #fff; cursor: pointer;
-    background: #ff4d4f; transition: background .16s ease;
-  }
-  .ca-btn-danger:hover { background: #ff1a1c; }
-
-  .ca-add-cat-btn {
-    margin-top: 6px; padding: 12px; border: 1px dashed #dfe3ec; border-radius: 12px;
-    background: #fbfcfe; color: #8a90a2; font-size: 13px; font-weight: 600;
-    font-family: inherit; cursor: pointer; transition: all .16s ease;
-  }
-  .ca-add-cat-btn:hover { border-color: #2f6bff; color: #2f6bff; background: #f0f5ff; }
-
-  /* 悬浮按钮设置面板 */
-  .ca-settings { padding: 10px; background: #fafbfd; border-radius: 8px; border: 1px solid #eceff5; }
-  .ca-setting-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; }
-  .ca-setting-row:last-child { margin-bottom: 0; }
-  .ca-setting-row label { color: #3b4252; font-weight: 600; }
-  .ca-setting-row input[type="color"] { border: none; width: 32px; height: 32px; padding: 0; background: none; cursor: pointer; }
-  .ca-setting-row input[type="range"] { width: 150px; cursor: pointer; }
-  .ca-setting-row input[type="file"] { font-size: 12px; max-width: 150px; }
-  .ca-reset-img-btn { font-size: 12px; padding: 4px 8px; }
-
-  /* 自定义确认框 */
-  .ca-dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100000; display: flex; align-items: center; justify-content: center; }
-  .ca-dialog { background: #fff; border-radius: 12px; padding: 20px; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); font-family: inherit; }
-  .ca-dialog h3 { margin: 0 0 10px; font-size: 16px; color: #1f2430; }
-  .ca-dialog p { margin: 0 0 15px; font-size: 13px; color: #6b7280; }
-  .ca-dialog select { width: 100%; margin-bottom: 20px; box-sizing: border-box; }
-  .ca-dialog-btns { display: flex; justify-content: flex-end; gap: 10px; }
-
-  @media (max-width: 520px) {
-    .ca-fab { right: 16px; bottom: 16px; width: 56px; height: 56px; font-size: 14px; }
-    .ca-overlay { padding: 12px; }
-    .ca-modal { max-height: 90vh; border-radius: 14px; }
-    .ca-header { padding: 16px 16px 12px; }
-    .ca-body { padding: 14px 16px 18px; }
-    .ca-item { flex-direction: column; align-items: stretch; }
-    .ca-actions { justify-content: flex-end; }
-    .ca-cat-ops { opacity: 1; }
-  }
-  `;
-
-  const styleEl = document.createElement('style');
-  styleEl.id = 'card-audit-style';
-  styleEl.textContent = CSS;
-  document.head.appendChild(styleEl);
-
-  /* =====================================================================
-   * 4. DOM 构建
-   * =================================================================== */
-  const fab = document.createElement('button');
-  fab.type = 'button';
-  fab.className = 'ca-fab';
-  fab.title = '字卡审核与管理';
-  fab.innerHTML = '<span class="ca-fab-label">审核</span><span class="ca-fab-badge"></span>';
-  const fabBadge = fab.querySelector('.ca-fab-badge');
-  const fabLabel = fab.querySelector('.ca-fab-label');
-  
-  const restoreBtn = document.createElement('div');
-  restoreBtn.className = 'ca-restore-btn';
-  restoreBtn.title = '点击恢复审核按钮';
-
-  const overlay = document.createElement('div');
-  overlay.className = 'ca-overlay';
-  overlay.innerHTML = `
-    <div class="ca-modal" role="dialog" aria-modal="true">
-      <div class="ca-header">
-        <div>
-          <h2 class="ca-title">字卡审核与管理</h2>
-          <p class="ca-subtitle">赛博伴侣 · 自动字卡系统</p>
-        </div>
-        <button type="button" class="ca-close" aria-label="关闭">×</button>
-      </div>
-      <div class="ca-body">
-        <section class="ca-section">
-          <div class="ca-section-head">
-            <h3 class="ca-h3">发起申请</h3>
-            <span class="ca-hint">提交后进入待审核列表</span>
-          </div>
-          <div class="ca-form">
-            <input class="ca-input" type="text" placeholder="输入字卡内容，如：你好" maxlength="50" />
-            <select class="ca-select"></select>
-            <button type="button" class="ca-btn-primary">发起申请</button>
-          </div>
-        </section>
-
-        <section class="ca-section">
-          <div class="ca-section-head">
-            <h3 class="ca-h3">待审核申请列表</h3>
-            <span class="ca-badge">0</span>
-          </div>
-          <ul class="ca-list"></ul>
-        </section>
-
-        <section class="ca-section">
-          <div class="ca-section-head">
-            <h3 class="ca-h3">字卡库分类</h3>
-            <div class="ca-head-actions">
-              <span class="ca-hint ca-total" style="margin-left: 0;">共 0 张</span>
-              <button type="button" class="ca-text-btn ca-export-btn">导出</button>
-              <button type="button" class="ca-text-btn ca-import-btn">导入</button>
-            </div>
-          </div>
-          <div class="ca-cats"></div>
-          <button type="button" class="ca-add-cat-btn">+ 新建分类</button>
-        </section>
-
-        <section class="ca-section">
-          <div class="ca-section-head">
-            <h3 class="ca-h3">悬浮按钮设置</h3>
-          </div>
-          <div class="ca-settings">
-            <div class="ca-setting-row">
-              <label>按钮颜色</label>
-              <input type="color" class="ca-color-input" value="#4f8cff">
-            </div>
-            <div class="ca-setting-row">
-              <label>按钮尺寸</label>
-              <input type="range" class="ca-size-input" min="40" max="100" value="64">
-            </div>
-            <div class="ca-setting-row">
-              <label>按钮图标</label>
-              <input type="file" class="ca-img-input" accept="image/*">
-            </div>
-            <button type="button" class="ca-text-btn ca-reset-img-btn">恢复默认外观</button>
-          </div>
-        </section>
-      </div>
-    </div>
-    <input type="file" class="ca-file-input" accept=".json" style="display: none;">
-  `;
-
-  const closeBtn    = overlay.querySelector('.ca-close');
-  const inputEl     = overlay.querySelector('.ca-input');
-  const selectEl    = overlay.querySelector('.ca-select');
-  const submitBtn   = overlay.querySelector('.ca-btn-primary');
-  const listEl      = overlay.querySelector('.ca-list');
-  const badgeEl     = overlay.querySelector('.ca-badge');
-  const catsEl      = overlay.querySelector('.ca-cats');
-  const totalHintEl = overlay.querySelector('.ca-total');
-  const addCatBtn   = overlay.querySelector('.ca-add-cat-btn');
-  
-  const exportBtn   = overlay.querySelector('.ca-export-btn');
-  const importBtn   = overlay.querySelector('.ca-import-btn');
-  const fileInput   = overlay.querySelector('.ca-file-input');
-  
-  const colorInput  = overlay.querySelector('.ca-color-input');
-  const sizeInput   = overlay.querySelector('.ca-size-input');
-  const imgInput    = overlay.querySelector('.ca-img-input');
-  const resetImgBtn = overlay.querySelector('.ca-reset-img-btn');
-
-  /* =====================================================================
-   * 5. 渲染逻辑
-   * =================================================================== */
-  let expandedCat = null;
-  let dragSrcCat = null;
-
-  function refreshFormSelect() {
-    const current = selectEl.value;
-    selectEl.innerHTML = '';
-    store.categoryOrder.forEach(function (name) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name;
-      selectEl.appendChild(opt);
-    });
-    if (current && store.categories[current]) selectEl.value = current;
-  }
-
-  function renderPending() {
-    listEl.innerHTML = '';
-    if (store.pending.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'ca-empty';
-      li.textContent = '暂无待审核申请';
-      listEl.appendChild(li);
-    } else {
-      store.pending.forEach(function (item) {
-        const li = document.createElement('li');
-        li.className = 'ca-item';
-        const main = document.createElement('div');
-        main.className = 'ca-item-main';
-
-        const title = document.createElement('div');
-        title.className = 'ca-item-title';
-        title.appendChild(document.createTextNode('「'));
-        const span = document.createElement('span');
-        span.className = 'ca-card-text';
-        span.textContent = item.text;
-        title.appendChild(span);
-        title.appendChild(document.createTextNode('」'));
-        main.appendChild(title);
-
-        const meta = document.createElement('div');
-        meta.className = 'ca-item-meta';
-        meta.textContent = item.user + ' · ' + fmtTime(item.createdAt);
-        main.appendChild(meta);
-
-        const catRow = document.createElement('div');
-        catRow.className = 'ca-item-cat';
-        const label = document.createElement('span');
-        label.className = 'ca-cat-label';
-        label.textContent = '归入分类：';
-        
-        const sel = document.createElement('select');
-        sel.className = 'ca-select-sm';
-        store.categoryOrder.forEach(function (name) {
-          const opt = document.createElement('option');
-          opt.value = name;
-          opt.textContent = name;
-          if (name === item.category) opt.selected = true;
-          sel.appendChild(opt);
-        });
-        catRow.appendChild(label);
-        catRow.appendChild(sel);
-        main.appendChild(catRow);
-
-        const actions = document.createElement('div');
-        actions.className = 'ca-actions';
-        const okBtn = document.createElement('button');
-        okBtn.type = 'button';
-        okBtn.className = 'ca-btn ca-btn-ok';
-        okBtn.textContent = '同意';
-        okBtn.addEventListener('click', function () { approve(item.id, sel.value); });
-
-        const noBtn = document.createElement('button');
-        noBtn.type = 'button';
-        noBtn.className = 'ca-btn ca-btn-no';
-        noBtn.textContent = '拒绝';
-        noBtn.addEventListener('click', function () { reject(item.id); });
-
-        actions.appendChild(okBtn);
-        actions.appendChild(noBtn);
-        li.appendChild(main);
-        li.appendChild(actions);
-        listEl.appendChild(li);
-      });
-    }
-    badgeEl.textContent = String(store.pending.length);
-  }
-
-  function renderCategories() {
-    catsEl.innerHTML = '';
-    let total = 0;
-
-    store.categoryOrder.forEach(function (name) {
-      const arr = store.categories[name];
-      if (!arr) return;
-      total += arr.length;
-
-      const row = document.createElement('div');
-      row.className = 'ca-cat-row' + (expandedCat === name ? ' is-active' : '');
-      row.setAttribute('draggable', 'true');
-      
-      row.addEventListener('dragstart', function (e) {
-        dragSrcCat = name;
-        row.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-      });
-      
-      row.addEventListener('dragend', function () {
-        row.classList.remove('dragging');
-        dragSrcCat = null;
-      });
-      
-      row.addEventListener('dragover', function (e) {
-        e.preventDefault();
-        if (dragSrcCat && dragSrcCat !== name) {
-          row.classList.add('drag-over');
+    if (Array.isArray(parsed.categoryOrder)) {
+      parsed.categoryOrder.forEach(function (n) {
+        if (typeof n === 'string' && d.categories[n] && d.categoryOrder.indexOf(n) === -1) {
+          d.categoryOrder.push(n);
         }
       });
-      
-      row.addEventListener('dragleave', function () {
-        row.classList.remove('drag-over');
-      });
-      
-      row.addEventListener('drop', function (e) {
-        e.preventDefault();
-        row.classList.remove('drag-over');
-        if (dragSrcCat && dragSrcCat !== name) {
-          const fromIdx = store.categoryOrder.indexOf(dragSrcCat);
-          const toIdx = store.categoryOrder.indexOf(name);
-          if (fromIdx > -1 && toIdx > -1) {
-            store.categoryOrder.splice(fromIdx, 1);
-            store.categoryOrder.splice(toIdx, 0, dragSrcCat);
-            writeStore(store);
-            renderCategories(); 
-          }
-        }
-      });
-
-      const catHeader = document.createElement('div');
-      catHeader.className = 'ca-cat';
-      catHeader.addEventListener('click', function (e) {
-        if (e.target.closest('.ca-cat-ops')) return;
-        expandedCat = (expandedCat === name) ? null : name;
-        renderCategories();
-      });
-
-      const arrow = document.createElement('span');
-      arrow.className = 'ca-cat-arrow';
-      arrow.textContent = expandedCat === name ? '▾' : '▸';
-
-      const nameEl = document.createElement('span');
-      nameEl.className = 'ca-cat-name';
-      nameEl.textContent = name;
-
-      const countEl = document.createElement('span');
-      countEl.className = 'ca-cat-count';
-      countEl.textContent = String(arr.length);
-
-      catHeader.appendChild(arrow);
-      catHeader.appendChild(nameEl);
-      catHeader.appendChild(countEl);
-
-      const ops = document.createElement('div');
-      ops.className = 'ca-cat-ops';
-      if (name !== FALLBACK_CAT) {
-        const renameBtn = document.createElement('button');
-        renameBtn.type = 'button';
-        renameBtn.className = 'ca-cat-op-btn';
-        renameBtn.title = '重命名';
-        renameBtn.textContent = '✎';
-        renameBtn.addEventListener('click', function () { renameCategory(name); });
-
-        const delBtn = document.createElement('button');
-        delBtn.type = 'button';
-        delBtn.className = 'ca-cat-op-btn del';
-        delBtn.title = '删除';
-        delBtn.textContent = '✕';
-        delBtn.addEventListener('click', function () { deleteCategory(name); });
-        
-        ops.appendChild(renameBtn);
-        ops.appendChild(delBtn);
-      }
-      catHeader.appendChild(ops);
-      row.appendChild(catHeader);
-
-      if (expandedCat === name) {
-        const box = document.createElement('div');
-        box.className = 'ca-cards-box';
-
-        if (arr.length === 0) {
-          const empty = document.createElement('div');
-          empty.className = 'ca-cards-empty';
-          empty.textContent = '该分类暂无字卡';
-          box.appendChild(empty);
-        } else {
-          const batchHeader = document.createElement('div');
-          batchHeader.className = 'ca-batch-header';
-          
-          const selectAllCb = document.createElement('input');
-          selectAllCb.type = 'checkbox';
-          selectAllCb.className = 'ca-card-cb';
-          selectAllCb.id = 'select-all-' + name;
-          
-          const selectAllLabel = document.createElement('label');
-          selectAllLabel.htmlFor = 'select-all-' + name;
-          selectAllLabel.appendChild(selectAllCb);
-          selectAllLabel.appendChild(document.createTextNode(' 全选'));
-          
-          batchHeader.appendChild(selectAllLabel);
-          box.appendChild(batchHeader);
-
-          arr.forEach(function (card) {
-            const wrap = document.createElement('div');
-            wrap.className = 'ca-card';
-            
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.className = 'ca-card-cb ca-card-select';
-            cb.dataset.id = card.id;
-            
-            const textEl = document.createElement('span');
-            textEl.className = 'ca-card-txt';
-            textEl.textContent = card.text;
-            
-            const cardOps = document.createElement('div');
-            cardOps.className = 'ca-card-ops';
-
-            const editBtn = document.createElement('button');
-            editBtn.type = 'button';
-            editBtn.className = 'ca-mini-btn';
-            editBtn.textContent = '编辑';
-            editBtn.addEventListener('click', function () { editCard(name, card.id); });
-
-            const delBtn = document.createElement('button');
-            delBtn.type = 'button';
-            delBtn.className = 'ca-mini-btn ca-mini-danger';
-            delBtn.textContent = '删除';
-            delBtn.addEventListener('click', function () { deleteCard(name, card.id); });
-
-            cardOps.appendChild(editBtn);
-            cardOps.appendChild(delBtn);
-            
-            wrap.appendChild(cb);
-            wrap.appendChild(textEl);
-            wrap.appendChild(cardOps);
-            box.appendChild(wrap);
-          });
-
-          selectAllCb.addEventListener('change', function () {
-            const cbs = box.querySelectorAll('.ca-card-select');
-            cbs.forEach(c => c.checked = selectAllCb.checked);
-          });
-
-          const batchFooter = document.createElement('div');
-          batchFooter.className = 'ca-batch-footer';
-          
-          const batchMoveBtn = document.createElement('button');
-          batchMoveBtn.type = 'button';
-          batchMoveBtn.className = 'ca-btn-primary';
-          batchMoveBtn.textContent = '批量转移';
-          batchMoveBtn.addEventListener('click', function () {
-            const cbs = box.querySelectorAll('.ca-card-select');
-            const selectedIds = [];
-            cbs.forEach(c => { if (c.checked) selectedIds.push(c.dataset.id); });
-            if (selectedIds.length === 0) return;
-            
-            showMoveDialog('批量转移字卡', selectedIds.length, name, function(targetCat) {
-              const moved = [];
-              store.categories[name] = store.categories[name].filter(card => {
-                if (selectedIds.includes(card.id)) {
-                  moved.push(card);
-                  return false;
-                }
-                return true;
-              });
-              store.categories[targetCat].push(...moved);
-              writeStore(store);
-              renderCategories();
-            });
-          });
-
-          const batchDelBtn = document.createElement('button');
-          batchDelBtn.type = 'button';
-          batchDelBtn.className = 'ca-btn-danger';
-          batchDelBtn.textContent = '批量删除';
-          batchDelBtn.addEventListener('click', function () {
-            const cbs = box.querySelectorAll('.ca-card-select');
-            const selectedIds = [];
-            cbs.forEach(c => { if (c.checked) selectedIds.push(c.dataset.id); });
-            if (selectedIds.length === 0) return;
-            if (!confirm('确定批量删除选中的 ' + selectedIds.length + ' 张字卡吗？')) return;
-            store.categories[name] = store.categories[name].filter(c => !selectedIds.includes(c.id));
-            writeStore(store);
-            renderCategories();
-          });
-          
-          batchFooter.appendChild(batchMoveBtn);
-          batchFooter.appendChild(batchDelBtn);
-          box.appendChild(batchFooter);
-        }
-        
-        row.appendChild(box);
-      }
-      catsEl.appendChild(row);
-    });
-    totalHintEl.textContent = '共 ' + total + ' 张';
-  }
-
-  function renderAll() {
-    refreshFormSelect();
-    renderPending();
-    renderCategories();
-  }
-
-  /* =====================================================================
-   * 6. 业务操作逻辑
-   * =================================================================== */
-  function submitApplication() {
-    const text = (inputEl.value || '').trim();
-    if (!text) { inputEl.focus(); return; }
-    if (store.pending.length >= MAX_PENDING) return;
-    if (existsText(text)) { inputEl.value = ''; return; }
-
-    let cat = selectEl.value || FALLBACK_CAT;
-    if (!store.categories[cat]) cat = FALLBACK_CAT;
-
-    store.pending.push({
-      id: uid(), text: text, user: DEFAULT_USER, category: cat, createdAt: Date.now()
-    });
-    writeStore(store);
-    inputEl.value = '';
-    renderPending();
-    inputEl.focus();
-  }
-
-  function approve(id, catName) {
-    const idx = store.pending.findIndex(function (x) { return x.id === id; });
-    if (idx === -1) return;
-    const item = store.pending[idx];
-    store.pending.splice(idx, 1);
-
-    let cat = catName && store.categories[catName] ? catName : FALLBACK_CAT;
-    if (!store.categories[cat]) store.categories[cat] = [];
-
-    store.categories[cat].push({
-      id: item.id, text: item.text, user: item.user, createdAt: item.createdAt, approvedAt: Date.now()
-    });
-    writeStore(store);
-    renderPending();
-    renderCategories();
-  }
-
-  function reject(id) {
-    const idx = store.pending.findIndex(function (x) { return x.id === id; });
-    if (idx === -1) return;
-    store.pending.splice(idx, 1);
-    writeStore(store);
-    renderPending();
-  }
-
-  function editCard(catName, cardId) {
-    const arr = store.categories[catName];
-    if (!arr) return;
-    const idx = arr.findIndex(function (x) { return x.id === cardId; });
-    if (idx === -1) return;
-
-    const cur = arr[idx].text;
-    let next = prompt('编辑字卡内容：', cur);
-    if (next == null) return;
-    next = String(next).trim();
-    if (!next || next === cur) return;
-
-    arr[idx].text = next;
-    writeStore(store);
-    renderCategories();
-  }
-
-  function deleteCard(catName, cardId) {
-    const arr = store.categories[catName];
-    if (!arr) return;
-    const idx = arr.findIndex(function (x) { return x.id === cardId; });
-    if (idx === -1) return;
-    if (!confirm('确定删除该字卡？\n「' + arr[idx].text + '」')) return;
-    arr.splice(idx, 1);
-    writeStore(store);
-    renderCategories();
-  }
-
-  function addCategory() {
-    const name = prompt('请输入新分类名称：');
-    if (!name) return;
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    if (store.categories[trimmed]) { alert('该分类已存在！'); return; }
-    store.categories[trimmed] = [];
-    store.categoryOrder.push(trimmed);
-    writeStore(store);
-    renderAll();
-  }
-
-  function renameCategory(oldName) {
-    if (oldName === FALLBACK_CAT) return;
-    const newName = prompt('请输入新的分类名称：', oldName);
-    if (!newName) return;
-    const trimmed = newName.trim();
-    if (!trimmed || trimmed === oldName) return;
-    if (store.categories[trimmed]) { alert('该名称已存在！'); return; }
-    store.categories[trimmed] = store.categories[oldName];
-    delete store.categories[oldName];
-    
-    const orderIdx = store.categoryOrder.indexOf(oldName);
-    if (orderIdx > -1) store.categoryOrder[orderIdx] = trimmed;
-
-    store.pending.forEach(function (item) {
-      if (item.category === oldName) item.category = trimmed;
-    });
-    if (expandedCat === oldName) expandedCat = trimmed;
-    writeStore(store);
-    renderAll();
-  }
-
-  function deleteCategory(catName) {
-    if (catName === FALLBACK_CAT) return;
-    const arr = store.categories[catName];
-    
-    if (arr.length > 0) {
-      showMoveDialog(`删除分类「${catName}」`, arr.length, catName, function(targetCat) {
-        store.categories[targetCat].push(...arr);
-        store.categories[catName] = [];
-        delete store.categories[catName];
-        store.categoryOrder = store.categoryOrder.filter(c => c !== catName);
-        
-        store.pending.forEach(function (item) {
-          if (item.category === catName) item.category = targetCat;
-        });
-        if (expandedCat === catName) expandedCat = null;
-        writeStore(store);
-        renderAll();
-      });
-    } else {
-      if (!confirm('确定要删除分类「' + catName + '」吗？')) return;
-      delete store.categories[catName];
-      store.categoryOrder = store.categoryOrder.filter(c => c !== catName);
-      store.pending.forEach(function (item) {
-        if (item.category === catName) item.category = FALLBACK_CAT;
-      });
-      if (expandedCat === catName) expandedCat = null;
-      writeStore(store);
-      renderAll();
     }
-  }
-
-  addCatBtn.addEventListener('click', addCategory);
-
-  /* =====================================================================
-   * 7. 自定义转移弹窗
-   * =================================================================== */
-  function showMoveDialog(title, itemCount, sourceCat, onConfirm) {
-    const dialogOverlay = document.createElement('div');
-    dialogOverlay.className = 'ca-dialog-overlay';
-    
-    const dialog = document.createElement('div');
-    dialog.className = 'ca-dialog';
-    
-    const h = document.createElement('h3');
-    h.textContent = title;
-    
-    const p = document.createElement('p');
-    p.textContent = `共 ${itemCount} 张字卡，请选择要转移到的目标分类：`;
-    
-    const sel = document.createElement('select');
-    sel.className = 'ca-select';
-    let hasTarget = false;
-    store.categoryOrder.forEach(name => {
-      if (name !== sourceCat) {
-        hasTarget = true;
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        sel.appendChild(opt);
-      }
+    Object.keys(d.categories).forEach(function (n) {
+      if (d.categoryOrder.indexOf(n) === -1) d.categoryOrder.push(n);
     });
-    
-    if (!hasTarget) {
-      p.textContent = '没有其他分类可供转移，请先创建新分类。';
-      sel.style.display = 'none';
-    }
-    
-    const btnWrap = document.createElement('div');
-    btnWrap.className = 'ca-dialog-btns';
-    
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'ca-btn ca-btn-no';
-    cancelBtn.textContent = '取消';
-    cancelBtn.onclick = () => document.body.removeChild(dialogOverlay);
-    
-    const okBtn = document.createElement('button');
-    okBtn.className = 'ca-btn ca-btn-ok';
-    okBtn.textContent = hasTarget ? '确认转移' : '确定';
-    if (!hasTarget) {
-      okBtn.onclick = () => document.body.removeChild(dialogOverlay);
-    } else {
-      okBtn.onclick = () => {
-        onConfirm(sel.value);
-        document.body.removeChild(dialogOverlay);
+
+    if (parsed.settings && typeof parsed.settings === 'object') {
+      var s = parsed.settings;
+      d.settings = {
+        color: typeof s.color === 'string' ? s.color : DEFAULT_SETTINGS.color,
+        size: typeof s.size === 'number' ? clamp(s.size, 36, 120) : DEFAULT_SETTINGS.size,
+        image: typeof s.image === 'string' ? s.image : '',
+        position: (s.position && typeof s.position.x === 'number' && typeof s.position.y === 'number')
+          ? { x: s.position.x, y: s.position.y }
+          : null,
+        isHidden: !!s.isHidden
       };
     }
-    
-    btnWrap.appendChild(cancelBtn);
-    btnWrap.appendChild(okBtn);
-    
-    dialog.appendChild(h);
-    dialog.appendChild(p);
-    dialog.appendChild(sel);
-    dialog.appendChild(btnWrap);
-    dialogOverlay.appendChild(dialog);
-    document.body.appendChild(dialogOverlay);
+    return d;
   }
 
-  /* =====================================================================
-   * 8. 导入与导出功能
-   * =================================================================== */
-  exportBtn.addEventListener('click', function () {
-    loadStore();
-    const dataStr = JSON.stringify(store, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'my-cards-backup.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  });
-
-  importBtn.addEventListener('click', function () { fileInput.click(); });
-
-  fileInput.addEventListener('change', function (e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = function (event) {
-      try {
-        const parsed = JSON.parse(event.target.result);
-        if (parsed && typeof parsed === 'object') {
-          store = normalizeStore(parsed);
-          writeStore(store);
-          renderAll();
-          alert('字卡数据导入成功！');
-        } else {
-          alert('导入失败：文件格式不正确。');
-        }
-      } catch (err) {
-        alert('导入失败：JSON 文件解析出错。');
+  var Store = {
+    data: null,
+    load: function () {
+      var raw = null;
+      try { raw = localStorage.getItem(LS_KEY); } catch (e) { raw = null; }
+      var parsed = null;
+      if (raw) {
+        try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
       }
-      fileInput.value = '';
-    };
-    reader.readAsText(file);
-  });
-
-  /* =====================================================================
-   * 9. 模块一：自动抓取
-   * =================================================================== */
-  function getMsgText(m) {
-    if (!m || typeof m !== 'object') return '';
-    const cand = [m.text, m.content, m.message, m.msg, m.body];
-    for (let i = 0; i < cand.length; i++) {
-      if (typeof cand[i] === 'string' && cand[i].trim()) return cand[i].trim();
+      this.data = normalizeData(parsed);
+      return this.data;
+    },
+    save: function () {
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(this.data));
+      } catch (e) {
+        console.warn('[梦角字卡] 保存失败：', e);
+        toast('本地存储写入失败，可能超出容量');
+      }
+    },
+    /** 确保至少有一个分类 */
+    ensureDefaults: function () {
+      var d = this.data;
+      if (!d.categoryOrder.length) {
+        ['主谓宾', '定状补', '场景描写'].forEach(function (n) {
+          d.categories[n] = d.categories[n] || [];
+          d.categoryOrder.push(n);
+        });
+        this.save();
+      }
     }
-    return '';
+  };
+
+  /* =======================================================================
+   * 2. 样式
+   * ===================================================================== */
+  var CSS = [
+    /* ---------- 悬浮球 ---------- */
+    '.mac-float-ball{position:fixed;z-index:2147483000;border-radius:50%;display:flex;align-items:center;',
+    'justify-content:center;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none;',
+    'box-shadow:none!important;border:none;outline:none;overflow:visible;background-size:cover;',
+    'background-position:center;background-repeat:no-repeat;font-family:-apple-system,BlinkMacSystemFont,',
+    '"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#fff;}',
+    '.mac-float-ball .mac-ball-text{font-weight:700;line-height:1;pointer-events:none;letter-spacing:1px;}',
+    '.mac-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;',
+    'border-radius:9px;background:#ff3b30;color:#fff;font-size:11px;line-height:18px;text-align:center;',
+    'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
+    'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;}',
+
+    /* ---------- 原生图标注入 ---------- */
+    '.mac-native-icon{position:relative;cursor:pointer;box-sizing:border-box;display:flex!important;',
+    'flex-direction:column;align-items:center;justify-content:center;box-shadow:none!important;}',
+    '.mac-native-inner{position:relative;display:inline-flex;align-items:center;justify-content:center;',
+    'width:44px;height:44px;border-radius:50%;background:#6c8cff;color:#fff;font-size:16px;font-weight:700;',
+    'background-size:cover;background-position:center;background-repeat:no-repeat;overflow:visible;',
+    'box-shadow:none!important;border:none;}',
+    '.mac-native-label{display:block;font-size:11px;line-height:1.4;margin-top:3px;text-align:center;',
+    'color:inherit;opacity:.85;pointer-events:none;}',
+
+    /* ---------- 隐藏后的边缘竖条 ---------- */
+    '.mac-edge-bar{position:fixed;left:0;top:50%;transform:translateY(-50%);width:10px;height:130px;',
+    'background:rgba(108,140,255,.10);border-radius:0 6px 6px 0;z-index:2147482000;cursor:pointer;',
+    'display:none;touch-action:none;}',
+    '.mac-edge-bar::after{content:"";position:absolute;left:0;top:0;width:100%;height:100%;',
+    'border-radius:0 6px 6px 0;background:rgba(108,140,255,.06);}',
+
+    /* ---------- 面板 ---------- */
+    '.mac-overlay{position:fixed;inset:0;background:rgba(15,20,35,.45);z-index:2147483600;display:none;',
+    'align-items:center;justify-content:center;padding:16px;box-sizing:border-box;',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
+    '.mac-overlay.is-open{display:flex;}',
+    '.mac-panel{width:min(760px,100%);max-height:88vh;background:#fff;border-radius:16px;display:flex;',
+    'flex-direction:column;overflow:hidden;box-shadow:none;border:1px solid rgba(0,0,0,.08);',
+    'box-sizing:border-box;color:#1f2430;}',
+    '.mac-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;',
+    'border-bottom:1px solid #eef0f5;background:#fafbff;flex:0 0 auto;}',
+    '.mac-header-title{font-size:16px;font-weight:700;letter-spacing:.5px;}',
+    '.mac-icon-btn{border:none;background:transparent;font-size:18px;line-height:1;cursor:pointer;',
+    'color:#8a90a2;padding:4px 8px;border-radius:8px;}',
+    '.mac-icon-btn:hover{background:#eef0f5;color:#3a4152;}',
+    '.mac-tabs{display:flex;gap:8px;padding:10px 18px;border-bottom:1px solid #eef0f5;',
+    'background:#fff;flex:0 0 auto;}',
+    '.mac-tab{position:relative;border:none;background:#f2f4f8;color:#4a5163;padding:8px 16px;',
+    'border-radius:10px;font-size:13px;cursor:pointer;font-weight:500;}',
+    '.mac-tab.is-active{background:#6c8cff;color:#fff;}',
+    '.mac-panes{flex:1 1 auto;overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch;}',
+    '.mac-pane{display:none;padding:16px 18px 22px;}',
+    '.mac-pane.is-active{display:block;}',
+
+    /* ---------- 通用控件 ---------- */
+    '.mac-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;}',
+    '.mac-input,.mac-textarea,.mac-select{border:1px solid #dde1ea;border-radius:10px;padding:8px 10px;',
+    'font-size:13px;background:#fff;color:#1f2430;box-sizing:border-box;outline:none;font-family:inherit;}',
+    '.mac-input:focus,.mac-textarea:focus,.mac-select:focus{border-color:#6c8cff;}',
+    '.mac-textarea{width:100%;min-height:64px;resize:vertical;line-height:1.5;}',
+    '.mac-input{flex:1 1 160px;min-width:0;}',
+    '.mac-select-sm{padding:4px 8px;font-size:12px;border-radius:8px;}',
+    '.mac-btn{border:1px solid #dde1ea;background:#fff;color:#3a4152;border-radius:10px;padding:8px 14px;',
+    'font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap;}',
+    '.mac-btn:hover{background:#f5f7fb;}',
+    '.mac-btn-primary{background:#6c8cff;border-color:#6c8cff;color:#fff;}',
+    '.mac-btn-primary:hover{background:#5a7bf5;}',
+    '.mac-btn-danger{background:#fff;border-color:#ffd0d0;color:#e5484d;}',
+    '.mac-btn-danger:hover{background:#fff5f5;}',
+    '.mac-mini{border:1px solid #e2e6ef;background:#fff;color:#4a5163;border-radius:8px;padding:4px 9px;',
+    'font-size:12px;cursor:pointer;white-space:nowrap;}',
+    '.mac-mini:hover{background:#f5f7fb;}',
+    '.mac-mini:disabled{opacity:.4;cursor:not-allowed;}',
+    '.mac-mini-primary{background:#6c8cff;border-color:#6c8cff;color:#fff;}',
+    '.mac-mini-primary:hover{background:#5a7bf5;}',
+    '.mac-mini-danger{color:#e5484d;border-color:#ffd0d0;}',
+    '.mac-mini-danger:hover{background:#fff5f5;}',
+    '.mac-empty{padding:24px 8px;text-align:center;color:#9aa1b2;font-size:13px;}',
+    '.mac-tip{font-size:13px;color:#4a5163;line-height:1.6;}',
+    '.mac-check{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#4a5163;cursor:pointer;}',
+
+    /* ---------- 待审核 ---------- */
+    '.mac-addbox{background:#f8f9fd;border:1px solid #eef0f5;border-radius:12px;padding:12px;}',
+    '.mac-list{margin-top:12px;display:flex;flex-direction:column;gap:10px;}',
+    '.mac-pending-item{border:1px solid #eef0f5;border-radius:12px;padding:10px 12px;background:#fff;}',
+    '.mac-pending-text{font-size:14px;line-height:1.6;color:#1f2430;word-break:break-word;}',
+    '.mac-pending-meta{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;}',
+    '.mac-sender{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;}',
+    '.mac-sender-meng{background:#eef0ff;color:#5a6bd8;}',
+    '.mac-sender-me{background:#e9f7ef;color:#1f9d55;}',
+
+    /* ---------- 分类列表 ---------- */
+    '.mac-cat-list{margin-top:12px;display:flex;flex-direction:column;gap:10px;}',
+    '.mac-cat{border:1px solid #eef0f5;border-radius:12px;overflow:hidden;background:#fff;}',
+    '.mac-cat-head{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f8f9fd;',
+    'cursor:grab;flex-wrap:wrap;}',
+    '.mac-cat-name{font-size:14px;font-weight:600;color:#1f2430;}',
+    '.mac-cat-count{font-size:11px;background:#e8ebf3;color:#5a6274;border-radius:999px;padding:1px 8px;}',
+    '.mac-cat-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;}',
+    '.mac-cat-body{padding:10px 12px 14px;border-top:1px solid #eef0f5;}',
+    '.mac-batchbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-bottom:10px;',
+    'border-bottom:1px dashed #eef0f5;margin-bottom:8px;}',
+    '.mac-card-list{display:flex;flex-direction:column;gap:6px;}',
+    '.mac-card{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:#fbfcfe;}',
+    '.mac-card:hover{background:#f4f6fb;}',
+    '.mac-card-text{flex:1 1 auto;font-size:13px;line-height:1.5;word-break:break-word;color:#2b3142;}',
+
+    /* ---------- 设置 ---------- */
+    '.mac-section{border:1px solid #eef0f5;border-radius:12px;padding:12px 14px;margin-bottom:12px;}',
+    '.mac-section-title{font-size:13px;font-weight:700;color:#3a4152;margin-bottom:10px;}',
+    '.mac-field{display:flex;align-items:center;gap:10px;font-size:13px;color:#4a5163;margin-bottom:10px;}',
+    '.mac-field input[type="color"]{width:44px;height:28px;border:1px solid #dde1ea;border-radius:8px;',
+    'background:#fff;padding:2px;cursor:pointer;}',
+    '.mac-field input[type="range"]{flex:1 1 auto;min-width:100px;accent-color:#6c8cff;}',
+
+    /* ---------- 模态框 ---------- */
+    '.mac-modal-overlay{position:fixed;inset:0;background:rgba(15,20,35,.5);z-index:2147483700;display:flex;',
+    'align-items:center;justify-content:center;padding:16px;box-sizing:border-box;',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
+    '.mac-modal{width:min(380px,100%);background:#fff;border-radius:14px;padding:16px;box-sizing:border-box;',
+    'box-shadow:none;border:1px solid rgba(0,0,0,.08);color:#1f2430;}',
+    '.mac-modal-title{font-size:15px;font-weight:700;margin-bottom:12px;}',
+    '.mac-modal-body{font-size:13px;color:#4a5163;line-height:1.6;}',
+    '.mac-modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;}',
+    '.mac-crop-stage{display:flex;align-items:center;justify-content:center;margin-bottom:12px;}',
+    '.mac-crop-canvas{border-radius:50%;touch-action:none;cursor:grab;background:#f2f4f8;max-width:100%;}',
+    '.mac-crop-zoom{width:100%;accent-color:#6c8cff;}',
+
+    /* ---------- Toast ---------- */
+    '.mac-toast{position:fixed;left:50%;bottom:64px;transform:translate(-50%,20px);background:rgba(30,36,52,.92);',
+    'color:#fff;font-size:13px;padding:10px 18px;border-radius:10px;z-index:2147483800;opacity:0;',
+    'pointer-events:none;transition:opacity .22s ease,transform .22s ease;max-width:80vw;text-align:center;',
+    'box-shadow:none;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;}',
+    '.mac-toast.is-show{opacity:1;transform:translate(-50%,0);}'
+  ].join('');
+
+  function injectCSS() {
+    if (document.querySelector('style[data-mac-style]')) return;
+    var style = document.createElement('style');
+    style.setAttribute('data-mac-style', '1');
+    style.textContent = CSS;
+    (document.head || document.documentElement).appendChild(style);
   }
 
-  function getMsgTime(m) {
-    if (!m || typeof m !== 'object') return null;
-    const cand = [m.ts, m.timestamp, m.createdAt, m.time, m.date, m.sendTime];
-    for (let i = 0; i < cand.length; i++) {
-      const v = cand[i];
-      if (v == null) continue;
-      if (typeof v === 'number' && isFinite(v)) return v < 1e12 ? v * 1000 : v;
-      if (typeof v === 'string') {
-        const n = Number(v);
-        if (!isNaN(n) && isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
-        const p = Date.parse(v);
+  /* =======================================================================
+   * 3. Toast
+   * ===================================================================== */
+  var toastTimer = null;
+  function toast(msg) {
+    var t = document.querySelector('.mac-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.className = 'mac-toast';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    // 强制重排以便动画生效
+    void t.offsetWidth;
+    t.classList.add('is-show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove('is-show'); }, 2200);
+  }
+
+  /* =======================================================================
+   * 4. 通用模态框
+   * ===================================================================== */
+  function showModal(opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      var overlay = document.createElement('div');
+      overlay.className = 'mac-modal-overlay';
+      overlay.innerHTML =
+        '<div class="mac-modal">' +
+          '<div class="mac-modal-title">' + esc(opts.title || '提示') + '</div>' +
+          '<div class="mac-modal-body">' + (opts.html || '') + '</div>' +
+          '<div class="mac-modal-footer">' +
+            '<button class="mac-btn" data-modal="cancel">取消</button>' +
+            '<button class="mac-btn mac-btn-primary" data-modal="ok">' + esc(opts.okText || '确定') + '</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(overlay);
+
+      function close(val) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(val);
+      }
+
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) { close(null); return; }
+        var b = e.target.closest('[data-modal]');
+        if (!b) return;
+        if (b.dataset.modal === 'cancel') {
+          close(null);
+        } else {
+          var val = true;
+          if (typeof opts.onOk === 'function') {
+            try { val = opts.onOk(overlay); } catch (err) { val = null; }
+          }
+          close(val === undefined ? true : val);
+        }
+      });
+    });
+  }
+
+  function confirmModal(title, text, okText) {
+    return showModal({
+      title: title,
+      html: '<div class="mac-tip">' + esc(text) + '</div>',
+      okText: okText || '确定'
+    }).then(function (v) { return v === true; });
+  }
+
+  /* =======================================================================
+   * 5. 图片裁剪（圆形预览）
+   * ===================================================================== */
+  function openCropModal(dataUrl, cb) {
+    var V = 280; // 预览画布尺寸
+
+    var overlay = document.createElement('div');
+    overlay.className = 'mac-modal-overlay';
+    overlay.innerHTML =
+      '<div class="mac-modal">' +
+        '<div class="mac-modal-title">调整图标图片</div>' +
+        '<div class="mac-crop-stage"><canvas class="mac-crop-canvas" width="' + V + '" height="' + V + '"></canvas></div>' +
+        '<input class="mac-crop-zoom" type="range" min="1" max="3" step="0.01" value="1">' +
+        '<div class="mac-modal-footer">' +
+          '<button class="mac-btn" data-crop="cancel">取消</button>' +
+          '<button class="mac-btn mac-btn-primary" data-crop="ok">确认</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    var canvas = overlay.querySelector('canvas');
+    var ctx = canvas.getContext('2d');
+    var zoomInput = overlay.querySelector('.mac-crop-zoom');
+    var img = new Image();
+    var baseScale = 1;
+    var zoom = 1;
+    var ox = 0;
+    var oy = 0;
+    var ready = false;
+
+    img.onload = function () {
+      baseScale = Math.max(V / img.width, V / img.height);
+      ready = true;
+      draw();
+    };
+    img.onerror = function () {
+      toast('图片加载失败');
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    };
+    img.src = dataUrl;
+
+    function draw() {
+      ctx.clearRect(0, 0, V, V);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(V / 2, V / 2, V / 2 - 1, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = '#f2f4f8';
+      ctx.fillRect(0, 0, V, V);
+      if (ready) {
+        var s = baseScale * zoom;
+        var w = img.width * s;
+        var h = img.height * s;
+        ctx.drawImage(img, V / 2 + ox - w / 2, V / 2 + oy - h / 2, w, h);
+      }
+      ctx.restore();
+      ctx.beginPath();
+      ctx.arc(V / 2, V / 2, V / 2 - 1, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0,0,0,.18)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    /* ---- 拖拽 ---- */
+    var dragging = false, sx = 0, sy = 0, sox = 0, soy = 0;
+    canvas.addEventListener('pointerdown', function (e) {
+      if (!ready) return;
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      sox = ox; soy = oy;
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      ox = sox + (e.clientX - sx);
+      oy = soy + (e.clientY - sy);
+      draw();
+    });
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
+    }
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+
+    zoomInput.addEventListener('input', function () {
+      zoom = parseFloat(zoomInput.value) || 1;
+      draw();
+    });
+
+    overlay.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-crop]');
+      if (!b) return;
+      if (b.dataset.crop === 'cancel') {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        return;
+      }
+      if (!ready) { toast('图片尚未加载完成'); return; }
+
+      var OUT = 256;
+      var out = document.createElement('canvas');
+      out.width = OUT;
+      out.height = OUT;
+      var octx = out.getContext('2d');
+      octx.clearRect(0, 0, OUT, OUT);
+      octx.save();
+      octx.beginPath();
+      octx.arc(OUT / 2, OUT / 2, OUT / 2, 0, Math.PI * 2);
+      octx.clip();
+      var k = OUT / V;
+      var s = baseScale * zoom;
+      var w = img.width * s * k;
+      var h = img.height * s * k;
+      octx.drawImage(img, OUT / 2 + ox * k - w / 2, OUT / 2 + oy * k - h / 2, w, h);
+      octx.restore();
+
+      var result = out.toDataURL('image/png');
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (typeof cb === 'function') cb(result);
+    });
+
+    draw();
+  }
+
+  /* =======================================================================
+   * 6. 入口：悬浮球 / 原生图标 / 边缘竖条
+   * ===================================================================== */
+  var ball = null;
+  var edgeBar = null;
+  var nativeIconEl = null;
+  var hideBadge = false; // 打开面板后角标清零
+
+  /* ---------- 6.1 悬浮球 ---------- */
+  function createBall() {
+    if (ball) return;
+    ball = document.createElement('div');
+    ball.className = 'mac-float-ball';
+    document.body.appendChild(ball);
+
+    var dragging = false;
+    var moved = false;
+    var startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+    ball.addEventListener('pointerdown', function (e) {
+      if (e.button !== undefined && e.button !== 0) return;
+      var r = ball.getBoundingClientRect();
+      dragging = true;
+      moved = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = r.left;
+      startTop = r.top;
+      // 从 right/bottom 定位切换到 left/top，保证拖拽连贯
+      ball.style.left = r.left + 'px';
+      ball.style.top = r.top + 'px';
+      ball.style.right = 'auto';
+      ball.style.bottom = 'auto';
+      try { ball.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    });
+
+    ball.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - startX;
+      var dy = e.clientY - startY;
+      if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) moved = true;
+      if (!moved) return;
+      var size = Store.data.settings.size;
+      var nl = clamp(startLeft + dx, 0, Math.max(0, window.innerWidth - size));
+      var nt = clamp(startTop + dy, 0, Math.max(0, window.innerHeight - size));
+      ball.style.left = nl + 'px';
+      ball.style.top = nt + 'px';
+    });
+
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      try { ball.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (moved) {
+        var r = ball.getBoundingClientRect();
+        Store.data.settings.position = { x: r.left, y: r.top };
+        Store.save();
+      } else {
+        openPanel();
+      }
+    }
+    ball.addEventListener('pointerup', endDrag);
+    ball.addEventListener('pointercancel', function (e) {
+      if (!dragging) return;
+      dragging = false;
+      try { ball.releasePointerCapture(e.pointerId); } catch (err) {}
+    });
+  }
+
+  function positionBall() {
+    if (!ball) return;
+    var s = Store.data.settings;
+    var size = s.size;
+    if (s.position && typeof s.position.x === 'number' && typeof s.position.y === 'number') {
+      var x = clamp(s.position.x, 0, Math.max(0, window.innerWidth - size));
+      var y = clamp(s.position.y, 0, Math.max(0, window.innerHeight - size));
+      ball.style.left = x + 'px';
+      ball.style.top = y + 'px';
+      ball.style.right = 'auto';
+      ball.style.bottom = 'auto';
+    } else {
+      ball.style.left = 'auto';
+      ball.style.top = 'auto';
+      ball.style.right = '20px';
+      ball.style.bottom = '110px';
+    }
+  }
+
+  /* ---------- 6.2 边缘竖条（长按 2 秒恢复） ---------- */
+  function createEdgeBar() {
+    if (edgeBar) return;
+    edgeBar = document.createElement('div');
+    edgeBar.className = 'mac-edge-bar';
+    document.body.appendChild(edgeBar);
+
+    var pressTimer = null;
+
+    function cancelPress() {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    }
+
+    edgeBar.addEventListener('pointerdown', function (e) {
+      cancelPress();
+      e.preventDefault();
+      pressTimer = setTimeout(function () {
+        pressTimer = null;
+        Store.data.settings.isHidden = false;
+        Store.save();
+        applyEntryUI();
+        toast('入口已恢复显示');
+      }, 2000);
+    });
+    edgeBar.addEventListener('pointerup', cancelPress);
+    edgeBar.addEventListener('pointerleave', cancelPress);
+    edgeBar.addEventListener('pointercancel', cancelPress);
+  }
+
+  /* ---------- 6.3 原生九宫格图标注入 ---------- */
+  function findGrid() {
+    var nodes = document.querySelectorAll('div, ul, nav, section, main');
+    var best = null;
+    var bestDepth = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (el.closest && el.closest('[data-mac-native-icon]')) continue;
+      var kids = el.children;
+      if (!kids || kids.length < 3 || kids.length > 30) continue;
+      var text = (el.textContent || '').replace(/\s+/g, '');
+      if (!text || text.length > 120) continue;
+      if (text.indexOf('聊天') === -1 || text.indexOf('信件') === -1) continue;
+      var depth = 0;
+      var p = el;
+      while (p && p !== document.body) { depth++; p = p.parentElement; }
+      if (depth > bestDepth) { bestDepth = depth; best = el; }
+    }
+    return best;
+  }
+
+  function buildNativeIcon(grid) {
+    var sample = grid.children[0];
+    var node;
+    if (sample && /^(DIV|LI|A|BUTTON|SPAN)$/i.test(sample.tagName)) {
+      node = sample.cloneNode(true);
+      node.removeAttribute('id');
+      var withId = node.querySelectorAll('[id]');
+      for (var i = 0; i < withId.length; i++) withId[i].removeAttribute('id');
+      var withClick = node.querySelectorAll('[onclick]');
+      for (var j = 0; j < withClick.length; j++) withClick[j].removeAttribute('onclick');
+      node.innerHTML = '';
+    } else {
+      node = document.createElement('div');
+    }
+
+    node.setAttribute('data-mac-native-icon', '1');
+    node.classList.add('mac-native-icon');
+    node.style.cursor = 'pointer';
+    node.style.position = 'relative';
+
+    node.innerHTML =
+      '<span class="mac-native-inner">' +
+        '<span class="mac-native-text">审</span>' +
+        '<span class="mac-badge" data-role="ball-badge"></span>' +
+      '</span>' +
+      '<span class="mac-native-label">审核</span>';
+
+    node.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openPanel();
+    }, true);
+
+    grid.appendChild(node);
+    return node;
+  }
+
+  function updateNativeIcon() {
+    if (!nativeIconEl) return;
+    var s = Store.data.settings;
+    var inner = nativeIconEl.querySelector('.mac-native-inner');
+    var text = nativeIconEl.querySelector('.mac-native-text');
+    if (!inner) return;
+
+    var size = clamp(s.size, 36, 72);
+    inner.style.width = size + 'px';
+    inner.style.height = size + 'px';
+    inner.style.fontSize = Math.round(size * 0.38) + 'px';
+
+    if (s.image) {
+      inner.style.backgroundImage = 'url("' + s.image + '")';
+      inner.style.backgroundSize = 'cover';
+      inner.style.backgroundPosition = 'center';
+      inner.style.backgroundColor = 'transparent';
+      if (text) text.style.opacity = '0';
+    } else {
+      inner.style.backgroundImage = 'none';
+      inner.style.backgroundColor = s.color;
+      if (text) text.style.opacity = '1';
+    }
+  }
+
+  function removeNativeIcon() {
+    if (nativeIconEl && nativeIconEl.parentNode) {
+      nativeIconEl.parentNode.removeChild(nativeIconEl);
+    }
+    nativeIconEl = null;
+  }
+
+  function tryInjectNativeIcon() {
+    try {
+      var s = Store.data.settings;
+      if (s.isHidden) { removeNativeIcon(); return; }
+      if (nativeIconEl && document.body.contains(nativeIconEl)) {
+        updateNativeIcon();
+        updateBadges();
+        return;
+      }
+      var grid = findGrid();
+      if (!grid) return;
+      if (grid.querySelector('[data-mac-native-icon]')) return;
+      nativeIconEl = buildNativeIcon(grid);
+      updateNativeIcon();
+      updateBadges();
+    } catch (e) {
+      /* 注入失败不影响悬浮球，静默 */
+    }
+  }
+
+  /* ---------- 6.4 角标 ---------- */
+  function updateBadges() {
+    var n = Store.data.pending.length;
+    var nodes = document.querySelectorAll('[data-role="ball-badge"]');
+    for (var i = 0; i < nodes.length; i++) {
+      var b = nodes[i];
+      if (n > 0 && !hideBadge) {
+        b.textContent = n > 99 ? '99+' : String(n);
+        b.style.display = 'flex';
+      } else {
+        b.style.display = 'none';
+      }
+    }
+  }
+
+  /* ---------- 6.5 应用整体外观 ---------- */
+  function applyEntryUI() {
+    var s = Store.data.settings;
+
+    if (ball) {
+      ball.style.display = s.isHidden ? 'none' : 'flex';
+      ball.style.width = s.size + 'px';
+      ball.style.height = s.size + 'px';
+      ball.style.backgroundColor = s.image ? 'transparent' : s.color;
+      ball.style.backgroundImage = s.image ? 'url("' + s.image + '")' : 'none';
+      ball.innerHTML =
+        '<span class="mac-ball-text" style="opacity:' + (s.image ? 0 : 1) +
+          ';font-size:' + Math.round(s.size * 0.38) + 'px">审</span>' +
+        '<span class="mac-badge" data-role="ball-badge"></span>';
+      positionBall();
+    }
+
+    if (edgeBar) {
+      edgeBar.style.display = s.isHidden ? 'block' : 'none';
+    }
+
+    if (s.isHidden) {
+      removeNativeIcon();
+    } else {
+      if (nativeIconEl && document.body.contains(nativeIconEl)) {
+        updateNativeIcon();
+      } else {
+        tryInjectNativeIcon();
+      }
+    }
+
+    updateBadges();
+  }
+
+  /* =======================================================================
+   * 7. 自动抓取（拟人化 · 低频 · 静默）
+   * ===================================================================== */
+  function pickTimestamp(m) {
+    var keys = ['time', 'timestamp', 'createdAt', 'created_at', 'ts', 'date', 'sendTime'];
+    for (var i = 0; i < keys.length; i++) {
+      var c = m[keys[i]];
+      if (typeof c === 'number' && isFinite(c)) {
+        return c < 1e12 ? c * 1000 : c;
+      }
+      if (typeof c === 'string' && c) {
+        if (/^\d+$/.test(c)) {
+          var n = Number(c);
+          if (isFinite(n)) return n < 1e12 ? n * 1000 : n;
+        }
+        var p = Date.parse(c);
         if (!isNaN(p)) return p;
       }
     }
     return null;
   }
 
-  function grabFromChat() {
-    loadStore();
-    if (store.pending.length >= MAX_PENDING) return 0;
+  function pickText(m) {
+    var keys = ['text', 'content', 'msg', 'message', 'value'];
+    for (var i = 0; i < keys.length; i++) {
+      var c = m[keys[i]];
+      if (typeof c === 'string' && c.trim()) return c.trim();
+    }
+    return '';
+  }
 
-    let raw = null;
-    try { raw = localStorage.getItem(CHAT_MSGS_KEY); } catch (e) { return 0; }
-    if (!raw) return 0;
+  function autoFetch() {
+    // 10% 概率触发
+    if (!(Math.random() > FETCH_PROBABILITY)) return;
 
-    let msgs = null;
-    try { msgs = JSON.parse(raw); } catch (e) { return 0; }
-    if (!Array.isArray(msgs) || msgs.length === 0) return 0;
+    var raw = null;
+    try { raw = localStorage.getItem(CHAT_KEY); } catch (e) { return; }
+    if (!raw) return;
 
-    const now = Date.now();
-    const candidates = [];
+    var msgs = null;
+    try { msgs = JSON.parse(raw); } catch (e) { return; }
+    if (!Array.isArray(msgs) || !msgs.length) return;
 
-    for (let i = 0; i < msgs.length; i++) {
-      const m = msgs[i];
-      if (!m || typeof m !== 'object' || m.side !== 'out') continue;
+    var d = Store.data;
+    if (d.pending.length >= MAX_PENDING) return; // 积压已满，暂停
 
-      const ts = getMsgTime(m);
-      if (ts == null || now - ts > RECENT_MS) continue;
+    var now = Date.now();
+    var WINDOW = 10 * 60 * 1000;
 
-      const text = getMsgText(m);
+    // 已知文本集合（字卡库 + 待审核）
+    var known = Object.create(null);
+    d.pending.forEach(function (p) { known[p.text] = 1; });
+    d.categoryOrder.forEach(function (name) {
+      (d.categories[name] || []).forEach(function (c) { known[c.text] = 1; });
+    });
+
+    var added = 0;
+    var hasAnyTimestamp = msgs.some(function (m) {
+      return m && typeof m === 'object' && pickTimestamp(m) !== null;
+    });
+
+    for (var i = 0; i < msgs.length; i++) {
+      if (d.pending.length >= MAX_PENDING) break;
+
+      var m = msgs[i];
+      if (!m || typeof m !== 'object') continue;
+      if (m.side !== 'out') continue;
+
+      var ts = pickTimestamp(m);
+      if (hasAnyTimestamp) {
+        if (ts === null) continue;
+        if (now - ts > WINDOW) continue;         // 超过 10 分钟
+        if (ts - now > 60 * 1000) continue;       // 未来时间容错
+      } else {
+        // 无时间戳时退化为：只看最后 15 条
+        if (i < msgs.length - 15) continue;
+      }
+
+      var text = pickText(m);
       if (!text) continue;
 
-      const len = countChars(text);
-      if (len < MIN_LEN || len > MAX_LEN) continue;
-      if (existsText(text)) continue;
+      var len = Array.from(text).length;
+      if (len < 5 || len > 35) continue;
 
-      let dup = false;
-      for (let k = 0; k < candidates.length; k++) {
-        if (candidates[k].text === text) { dup = true; break; }
-      }
-      if (dup) continue;
-      candidates.push({ text: text, ts: ts });
-    }
+      if (known[text]) continue;      // 严格去重
+      known[text] = 1;
 
-    if (candidates.length === 0) return 0;
-    candidates.sort(function (a, b) { return a.ts - b.ts; });
-
-    let added = 0;
-    for (let i = 0; i < candidates.length; i++) {
-      if (store.pending.length >= MAX_PENDING) break;
-      store.pending.push({
+      d.pending.push({
         id: uid(),
-        text: candidates[i].text,
-        user: DEFAULT_USER,
-        category: FALLBACK_CAT,
-        createdAt: Date.now()
+        text: text,
+        category: d.categoryOrder[0] || DEFAULT_CATEGORY,
+        sender: '梦角'                 // 核心：自动抓取的来源
       });
       added++;
     }
-    if (added > 0) writeStore(store);
-    return added;
-  }
 
-  function tick() {
-    if (Math.random() > 0.9) {
-      const added = grabFromChat();
-      if (added > 0) {
-        unread += added;
-        updateFabBadge();
-        if (overlay.classList.contains('is-open')) {
-          renderPending();
-          renderCategories();
-        }
-      }
+    if (added > 0) {
+      Store.save();
+      hideBadge = false;
+      refreshUI();
+      // 静默提示（非阻塞，不使用 alert）
+      toast('已静默收录 ' + added + ' 条字卡');
     }
   }
 
-  /* =====================================================================
-   * 10. 悬浮按钮自定义设置
-   * =================================================================== */
-  function applyFabConfig() {
-    try {
-      const color = localStorage.getItem('my-audit-fab-color');
-      if (color) {
-        fab.style.background = color;
-        colorInput.value = color;
-      }
-      
-      const size = localStorage.getItem('my-audit-fab-size');
-      if (size) {
-        fab.style.width = size + 'px';
-        fab.style.height = size + 'px';
-        fab.style.fontSize = Math.max(12, parseInt(size)/4) + 'px';
-        sizeInput.value = size;
-      }
-      
-      const img = localStorage.getItem('my-audit-fab-img');
-      if (img) {
-        fab.style.background = `url(${img}) center/cover`;
-        fabLabel.style.display = 'none';
-      } else {
-        fabLabel.style.display = 'block';
-      }
-    } catch (e) {}
+  /* =======================================================================
+   * 8. 管理面板
+   * ===================================================================== */
+  var panelRoot = null;
+  var expandedCats = Object.create(null);
+
+  function buildPanelHTML() {
+    return '' +
+      '<div class="mac-panel">' +
+        '<div class="mac-header">' +
+          '<div class="mac-header-title">梦角字卡 · 审核与管理</div>' +
+          '<button class="mac-icon-btn" data-act="close">✕</button>' +
+        '</div>' +
+        '<div class="mac-tabs">' +
+          '<button class="mac-tab is-active" data-tab="review">待审核</button>' +
+          '<button class="mac-tab" data-tab="cards">字卡库</button>' +
+          '<button class="mac-tab" data-tab="settings">设置</button>' +
+        '</div>' +
+        '<div class="mac-panes">' +
+
+          /* ---- 待审核 ---- */
+          '<div class="mac-pane is-active" data-pane="review">' +
+            '<div class="mac-addbox">' +
+              '<textarea class="mac-textarea" data-role="manual-text" ' +
+                'placeholder="手动输入要添加的字卡内容，提交后进入待审核（发件人：我）"></textarea>' +
+              '<div class="mac-row">' +
+                '<select class="mac-select" data-role="manual-cat"></select>' +
+                '<button class="mac-btn mac-btn-primary" data-act="manual-add">提交审核</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="mac-list" data-role="pending-list"></div>' +
+            '<div class="mac-row">' +
+              '<button class="mac-btn" data-act="approve-all">全部通过</button>' +
+              '<button class="mac-btn mac-btn-danger" data-act="clear-pending">清空待审核</button>' +
+            '</div>' +
+          '</div>' +
+
+          /* ---- 字卡库 ---- */
+          '<div class="mac-pane" data-pane="cards">' +
+            '<div class="mac-row">' +
+              '<input class="mac-input" data-role="new-cat" placeholder="新分类名称">' +
+              '<button class="mac-btn mac-btn-primary" data-act="add-cat">新建分类</button>' +
+            '</div>' +
+            '<div class="mac-cat-list" data-role="cat-list"></div>' +
+          '</div>' +
+
+          /* ---- 设置 ---- */
+          '<div class="mac-pane" data-pane="settings">' +
+            '<div class="mac-section">' +
+              '<div class="mac-section-title">图标外观</div>' +
+              '<div class="mac-field"><span>背景颜色</span><input type="color" data-role="set-color"></div>' +
+              '<div class="mac-field"><span>图标大小</span>' +
+                '<input type="range" min="36" max="96" step="2" data-role="set-size">' +
+                '<span data-role="size-val">56</span></div>' +
+              '<div class="mac-row">' +
+                '<button class="mac-btn" data-act="upload-img">上传自定义图片</button>' +
+                '<button class="mac-btn" data-act="clear-img">清除图片</button>' +
+              '</div>' +
+              '<input type="file" accept="image/*" data-role="img-file" style="display:none">' +
+            '</div>' +
+
+            '<div class="mac-section">' +
+              '<div class="mac-section-title">入口控制</div>' +
+              '<label class="mac-check"><input type="checkbox" data-role="set-hidden"> ' +
+                '隐藏所有入口（长按屏幕左侧竖条 2 秒恢复）</label>' +
+              '<div class="mac-row">' +
+                '<button class="mac-btn" data-act="reset-pos">重置悬浮球位置</button>' +
+              '</div>' +
+            '</div>' +
+
+            '<div class="mac-section">' +
+              '<div class="mac-section-title">数据安全</div>' +
+              '<div class="mac-row">' +
+                '<button class="mac-btn" data-act="export">导出备份</button>' +
+                '<button class="mac-btn" data-act="import">导入备份</button>' +
+              '</div>' +
+              '<input type="file" accept=".json,application/json" data-role="import-file" style="display:none">' +
+            '</div>' +
+          '</div>' +
+
+        '</div>' +
+      '</div>';
   }
 
-  colorInput.addEventListener('input', function() {
-    fab.style.background = this.value;
-    localStorage.setItem('my-audit-fab-color', this.value);
-  });
-
-  sizeInput.addEventListener('input', function() {
-    fab.style.width = this.value + 'px';
-    fab.style.height = this.value + 'px';
-    fab.style.fontSize = Math.max(12, parseInt(this.value)/4) + 'px';
-    localStorage.setItem('my-audit-fab-size', this.value);
-  });
-
-  imgInput.addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = function(evt) {
-      const base64 = evt.target.result;
-      fab.style.background = `url(${base64}) center/cover`;
-      fabLabel.style.display = 'none';
-      localStorage.setItem('my-audit-fab-img', base64);
-    };
-    reader.readAsDataURL(file);
-    imgInput.value = '';
-  });
-
-  resetImgBtn.addEventListener('click', function() {
-    localStorage.removeItem('my-audit-fab-img');
-    localStorage.removeItem('my-audit-fab-color');
-    fab.style.background = 'linear-gradient(135deg, #4f8cff 0%, #2f6bff 100%)';
-    fabLabel.style.display = 'block';
-    colorInput.value = '#4f8cff';
-  });
-
-  /* =====================================================================
-   * 11. 悬浮按钮拖拽与隐藏
-   * =================================================================== */
-  let isDragging = false;
-  let hasMoved = false;
-  let startX, startY, initialLeft, initialTop;
-
-  function initFabPosition() {
-    try {
-      const saved = localStorage.getItem('my-audit-fab-pos');
-      if (saved) {
-        const { left, top } = JSON.parse(saved);
-        if (typeof left === 'number' && typeof top === 'number') {
-          fab.style.left = left + 'px';
-          fab.style.top = top + 'px';
-          fab.style.right = 'auto';
-          fab.style.bottom = 'auto';
-        }
-      }
-    } catch(e) {}
+  function ensurePanel() {
+    if (panelRoot) return panelRoot;
+    panelRoot = document.createElement('div');
+    panelRoot.className = 'mac-overlay';
+    panelRoot.innerHTML = buildPanelHTML();
+    document.body.appendChild(panelRoot);
+    bindPanelEvents(panelRoot);
+    return panelRoot;
   }
 
-  function dragStart(e) {
-    if (e.target.closest('.ca-fab-hide-btn')) return;
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    startX = clientX;
-    startY = clientY;
-    const rect = fab.getBoundingClientRect();
-    initialLeft = rect.left;
-    initialTop = rect.top;
-    isDragging = true;
-    hasMoved = false;
-    fab.style.transition = 'none';
-    
-    document.addEventListener('mousemove', dragMove);
-    document.addEventListener('touchmove', dragMove, { passive: false });
-    document.addEventListener('mouseup', dragEnd);
-    document.addEventListener('touchend', dragEnd);
+  function openPanel() {
+    ensurePanel();
+    panelRoot.classList.add('is-open');
+    renderAll();
+    hideBadge = true;   // 点开面板后角标清零
+    updateBadges();
   }
 
-  function dragMove(e) {
-    if (!isDragging) return;
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    const dx = clientX - startX;
-    const dy = clientY - startY;
-    
-    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) hasMoved = true;
-    
-    if (hasMoved) {
-      if (e.cancelable) e.preventDefault();
-      let newLeft = initialLeft + dx;
-      let newTop = initialTop + dy;
-      
-      newLeft = Math.max(0, Math.min(window.innerWidth - fab.offsetWidth, newLeft));
-      newTop = Math.max(0, Math.min(window.innerHeight - fab.offsetHeight, newTop));
-      
-      fab.style.left = newLeft + 'px';
-      fab.style.top = newTop + 'px';
-      fab.style.right = 'auto';
-      fab.style.bottom = 'auto';
+  function closePanel() {
+    if (panelRoot) panelRoot.classList.remove('is-open');
+  }
+
+  function switchTab(name) {
+    if (!panelRoot) return;
+    var tabs = panelRoot.querySelectorAll('.mac-tab');
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].classList.toggle('is-active', tabs[i].dataset.tab === name);
+    }
+    var panes = panelRoot.querySelectorAll('.mac-pane');
+    for (var j = 0; j < panes.length; j++) {
+      panes[j].classList.toggle('is-active', panes[j].dataset.pane === name);
     }
   }
 
-  function dragEnd(e) {
-    if (!isDragging) return;
-    isDragging = false;
-    fab.style.transition = '';
-    document.removeEventListener('mousemove', dragMove);
-    document.removeEventListener('touchmove', dragMove);
-    document.removeEventListener('mouseup', dragEnd);
-    document.removeEventListener('touchend', dragEnd);
-    
-    if (hasMoved) {
-      const rect = fab.getBoundingClientRect();
-      localStorage.setItem('my-audit-fab-pos', JSON.stringify({ left: rect.left, top: rect.top }));
+  /* ---------- 8.1 渲染 ---------- */
+  function findCatEl(name) {
+    if (!panelRoot) return null;
+    var nodes = panelRoot.querySelectorAll('.mac-cat');
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].dataset.cat === name) return nodes[i];
     }
+    return null;
   }
 
-  fab.addEventListener('mousedown', dragStart);
-  fab.addEventListener('touchstart', dragStart, { passive: false });
-  
-  fab.addEventListener('click', function(e) {
-    if (hasMoved) {
-      e.preventDefault();
-      e.stopPropagation();
+  function renderPending() {
+    var list = panelRoot.querySelector('[data-role="pending-list"]');
+    var pending = Store.data.pending;
+    if (!pending.length) {
+      list.innerHTML = '<div class="mac-empty">暂无待审核字卡</div>';
       return;
     }
-    openModal();
-  });
-
-  // 小关闭按钮
-  const fabHideBtn = document.createElement('div');
-  fabHideBtn.className = 'ca-fab-hide-btn';
-  fabHideBtn.textContent = '×';
-  fabHideBtn.title = '隐藏悬浮按钮';
-  fab.appendChild(fabHideBtn);
-
-  function hideFab() {
-    fab.style.display = 'none';
-    restoreBtn.style.display = 'block';
-    localStorage.setItem('my-audit-fab-hidden', 'true');
+    var cats = Store.data.categoryOrder;
+    list.innerHTML = pending.map(function (p) {
+      var isMeng = p.sender === '梦角';
+      var options = cats.map(function (n) {
+        return '<option value="' + escAttr(n) + '"' + (n === p.category ? ' selected' : '') + '>' +
+          esc(n) + '</option>';
+      }).join('');
+      return '' +
+        '<div class="mac-pending-item" data-id="' + escAttr(p.id) + '">' +
+          '<div class="mac-pending-text">' + esc(p.text) + '</div>' +
+          '<div class="mac-pending-meta">' +
+            '<span class="mac-sender ' + (isMeng ? 'mac-sender-meng' : 'mac-sender-me') + '">' +
+              (isMeng ? '梦角' : '我') + '</span>' +
+            '<select class="mac-select mac-select-sm" data-role="pending-cat" data-id="' +
+              escAttr(p.id) + '">' + options + '</select>' +
+            '<button class="mac-mini mac-mini-primary" data-act="approve" data-id="' +
+              escAttr(p.id) + '">通过</button>' +
+            '<button class="mac-mini mac-mini-danger" data-act="reject" data-id="' +
+              escAttr(p.id) + '">删除</button>' +
+          '</div>' +
+        '</div>';
+    }).join('');
   }
 
-  function showFab() {
-    fab.style.display = 'flex';
-    restoreBtn.style.display = 'none';
-    localStorage.setItem('my-audit-fab-hidden', 'false');
+  function renderCatBody(name, cards) {
+    if (!cards.length) return '<div class="mac-empty">该分类下暂无字卡</div>';
+
+    var others = Store.data.categoryOrder.filter(function (n) { return n !== name; });
+    var opts = others.length
+      ? others.map(function (n) {
+          return '<option value="' + escAttr(n) + '">' + esc(n) + '</option>';
+        }).join('')
+      : '<option value="">无其他分类</option>';
+
+    var items = cards.map(function (c) {
+      return '' +
+        '<div class="mac-card" data-id="' + escAttr(c.id) + '">' +
+          '<input type="checkbox" class="mac-card-check" data-id="' + escAttr(c.id) + '">' +
+          '<span class="mac-card-text">' + esc(c.text) + '</span>' +
+          '<button class="mac-mini" data-act="card-edit" data-cat="' + escAttr(name) +
+            '" data-id="' + escAttr(c.id) + '">编辑</button>' +
+          '<button class="mac-mini mac-mini-danger" data-act="card-del" data-cat="' + escAttr(name) +
+            '" data-id="' + escAttr(c.id) + '">删除</button>' +
+        '</div>';
+    }).join('');
+
+    return '' +
+      '<div class="mac-batchbar">' +
+        '<label class="mac-check"><input type="checkbox" data-role="select-all"> 全选</label>' +
+        '<button class="mac-mini" data-act="batch-del" data-cat="' + escAttr(name) + '">批量删除</button>' +
+        '<select class="mac-select mac-select-sm" data-role="batch-target">' + opts + '</select>' +
+        '<button class="mac-mini" data-act="batch-move" data-cat="' + escAttr(name) + '">批量转移</button>' +
+      '</div>' +
+      '<div class="mac-card-list">' + items + '</div>';
   }
 
-  fabHideBtn.addEventListener('click', function(e) {
-    e.stopPropagation();
-    hideFab();
-  });
+  function renderCards() {
+    var list = panelRoot.querySelector('[data-role="cat-list"]');
+    var d = Store.data;
+    if (!d.categoryOrder.length) {
+      list.innerHTML = '<div class="mac-empty">还没有分类，先新建一个吧</div>';
+      return;
+    }
+    list.innerHTML = d.categoryOrder.map(function (name, idx) {
+      var cards = d.categories[name] || [];
+      var expanded = !!expandedCats[name];
+      return '' +
+        '<div class="mac-cat" data-cat="' + escAttr(name) + '" draggable="true">' +
+          '<div class="mac-cat-head">' +
+            '<span class="mac-cat-name">' + esc(name) + '</span>' +
+            '<span class="mac-cat-count">' + cards.length + '</span>' +
+            '<div class="mac-cat-actions">' +
+              '<button class="mac-mini" data-act="cat-up" data-cat="' + escAttr(name) + '"' +
+                (idx === 0 ? ' disabled' : '') + '>上移</button>' +
+              '<button class="mac-mini" data-act="cat-down" data-cat="' + escAttr(name) + '"' +
+                (idx === d.categoryOrder.length - 1 ? ' disabled' : '') + '>下移</button>' +
+              '<button class="mac-mini" data-act="cat-rename" data-cat="' + escAttr(name) + '">改名</button>' +
+              '<button class="mac-mini" data-act="cat-toggle" data-cat="' + escAttr(name) + '">' +
+                (expanded ? '收起' : '展开') + '</button>' +
+              '<button class="mac-mini mac-mini-danger" data-act="cat-del" data-cat="' +
+                escAttr(name) + '">删除</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="mac-cat-body"' + (expanded ? '' : ' style="display:none"') + '>' +
+            (expanded ? renderCatBody(name, cards) : '') +
+          '</div>' +
+        '</div>';
+    }).join('');
+  }
 
-  restoreBtn.addEventListener('click', showFab);
+  function renderSettings() {
+    if (!panelRoot) return;
+    var s = Store.data.settings;
+    var color = panelRoot.querySelector('[data-role="set-color"]');
+    var size = panelRoot.querySelector('[data-role="set-size"]');
+    var sizeVal = panelRoot.querySelector('[data-role="size-val"]');
+    var hidden = panelRoot.querySelector('[data-role="set-hidden"]');
+    if (color) color.value = normalizeHex(s.color);
+    if (size) size.value = s.size;
+    if (sizeVal) sizeVal.textContent = s.size;
+    if (hidden) hidden.checked = !!s.isHidden;
+  }
 
-  // 快捷键恢复 (三连 Shift)
-  let shiftCount = 0;
-  let shiftTimer = null;
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Shift') {
-      shiftCount++;
-      clearTimeout(shiftTimer);
-      if (shiftCount >= 3) {
-        showFab();
-        shiftCount = 0;
+  function renderManualCat() {
+    var sel = panelRoot.querySelector('[data-role="manual-cat"]');
+    if (!sel) return;
+    var prev = sel.value;
+    var cats = Store.data.categoryOrder;
+    sel.innerHTML = cats.map(function (n) {
+      return '<option value="' + escAttr(n) + '">' + esc(n) + '</option>';
+    }).join('');
+    if (prev && cats.indexOf(prev) !== -1) sel.value = prev;
+  }
+
+  function renderAll() {
+    if (!panelRoot) return;
+    renderManualCat();
+    renderPending();
+    renderCards();
+    renderSettings();
+  }
+
+  /** 数据变更后的统一刷新 */
+  function refreshUI() {
+    updateBadges();
+    if (panelRoot && panelRoot.classList.contains('is-open')) {
+      renderAll();
+    }
+    applyEntryUI();
+  }
+
+  /* ---------- 8.2 事件绑定 ---------- */
+  function bindPanelEvents(root) {
+    root.addEventListener('click', function (e) {
+      var tabBtn = e.target.closest('[data-tab]');
+      if (tabBtn && root.contains(tabBtn)) {
+        switchTab(tabBtn.dataset.tab);
+        return;
       }
-      shiftTimer = setTimeout(() => { shiftCount = 0; }, 1000);
-    }
-  });
+      var btn = e.target.closest('[data-act]');
+      if (btn && root.contains(btn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleAction(btn.dataset.act, btn);
+        return;
+      }
+      if (e.target === root) closePanel();
+    });
 
-  /* =====================================================================
-   * 12. 静默提醒与 UI 控制
-   * =================================================================== */
-  let unread = 0;
+    root.addEventListener('change', function (e) {
+      var t = e.target;
 
-  function updateFabBadge() {
-    if (unread > 0) {
-      fabBadge.textContent = unread > 99 ? '99+' : String(unread);
-      fabBadge.style.display = 'flex';
-    } else {
-      fabBadge.textContent = '';
-      fabBadge.style.display = 'none';
-    }
-  }
-
-  let prevBodyOverflow = '';
-
-  function openModal() {
-    loadStore();
-    unread = 0;
-    updateFabBadge();
-    renderAll();
-
-    prevBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    overlay.classList.add('is-open');
-    setTimeout(function () { try { inputEl.focus(); } catch (e) {} }, 80);
-  }
-
-  function closeModal() {
-    overlay.classList.remove('is-open');
-    document.body.style.overflow = prevBodyOverflow || '';
-    try { fab.focus(); } catch (e) {}
-  }
-
-  closeBtn.addEventListener('click', closeModal);
-  overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(); });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && overlay.classList.contains('is-open')) closeModal();
-  });
-
-  submitBtn.addEventListener('click', submitApplication);
-  inputEl.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); submitApplication(); }
-  });
-
-  /* =====================================================================
-   * 13. 原网站字卡数据融合（拦截器）
-   * =================================================================== */
-  function setupCardInterceptor() {
-    try {
-      if (window.__CARD_AUDIT_INTERCEPTOR_DONE__) return;
-      window.__CARD_AUDIT_INTERCEPTOR_DONE__ = true;
-
-      const originalGetItem = Storage.prototype.getItem;
-      const originalSetItem = Storage.prototype.setItem;
-
-      Storage.prototype.getItem = function (key) {
-        const value = originalGetItem.call(this, key);
-        if (key !== TARGET_CARD_KEY) return value;
-
-        try {
-          const myRaw = originalGetItem.call(this, STORAGE_KEY);
-          if (!myRaw) return value;
-
-          const myStore = JSON.parse(myRaw);
-          const myTexts = [];
-          if (myStore && myStore.categories) {
-            Object.keys(myStore.categories).forEach(function (cat) {
-              const arr = myStore.categories[cat];
-              if (Array.isArray(arr)) {
-                arr.forEach(function (c) {
-                  if (c && typeof c.text === 'string' && c.text.trim()) myTexts.push(c.text.trim());
-                });
-              }
-            });
-          }
-          if (myTexts.length === 0) return value;
-
-          let origArr = [];
-          let origObjRoot = null;
-          let isObjMode = false;
-          let template = null;
-
-          if (value) {
-            try {
-              const parsed = JSON.parse(value);
-              if (Array.isArray(parsed)) {
-                origArr = parsed;
-                if (parsed.length > 0 && typeof parsed[0] === 'object' && parsed[0] !== null) {
-                  isObjMode = true;
-                  template = parsed[0];
-                }
-              } else if (typeof parsed === 'object' && parsed !== null) {
-                const keys = ['tail', 'list', 'items', 'data'];
-                for (let k of keys) {
-                  if (Array.isArray(parsed[k])) {
-                    origArr = parsed[k];
-                    origObjRoot = parsed;
-                    if (parsed[k].length > 0 && typeof parsed[k][0] === 'object' && parsed[k][0] !== null) {
-                      isObjMode = true;
-                      template = parsed[k][0];
-                    }
-                    break;
-                  }
-                }
-              }
-            } catch (e) {}
-          }
-
-          const existingTexts = new Set();
-          origArr.forEach(function (item) {
-            if (typeof item === 'string') existingTexts.add(item);
-            else if (item && typeof item === 'object') {
-              for (let k in item) {
-                if (typeof item[k] === 'string') { existingTexts.add(item[k]); break; }
-              }
-            }
-          });
-
-          let changed = false;
-          myTexts.forEach(function (t) {
-            if (!existingTexts.has(t)) {
-              if (isObjMode && template) {
-                const newObj = JSON.parse(JSON.stringify(template));
-                let textReplaced = false;
-                for (let k in newObj) {
-                  if (k === 'id' || k === 'uuid' || k === 'key') {
-                    newObj[k] = 'my_' + Math.random().toString(36).slice(2, 9);
-                  } else if (typeof newObj[k] === 'string' && !textReplaced) {
-                    newObj[k] = t;
-                    textReplaced = true;
-                  } else if (typeof newObj[k] === 'number') newObj[k] = 0;
-                  else if (typeof newObj[k] === 'boolean') newObj[k] = false;
-                }
-                if (!textReplaced) newObj.text = t;
-                origArr.push(newObj);
-              } else {
-                origArr.push(t);
-              }
-              existingTexts.add(t);
-              changed = true;
-            }
-          });
-
-          if (changed) {
-            let finalStr = '';
-            if (origObjRoot) {
-               const keys = ['tail', 'list', 'items', 'data'];
-               for (let k of keys) {
-                  if (Array.isArray(origObjRoot[k])) { origObjRoot[k] = origArr; break; }
-               }
-               finalStr = JSON.stringify(origObjRoot);
-            } else {
-               finalStr = JSON.stringify(origArr);
-            }
-            try { originalSetItem.call(this, key, finalStr); } catch(e){}
-            return finalStr;
-          }
-        } catch (err) {
-          console.warn('[字卡系统] 融合静默报错:', err);
+      if (t.matches('[data-role="select-all"]')) {
+        var catBody = t.closest('.mac-cat-body');
+        if (catBody) {
+          var boxes = catBody.querySelectorAll('.mac-card-check');
+          for (var i = 0; i < boxes.length; i++) boxes[i].checked = t.checked;
         }
-        return value;
-      };
-    } catch (err) {
-      console.warn('[字卡系统] 拦截器安装失败:', err);
-    }
-  }
-
-  /* =====================================================================
-   * 14. 挂载与启动
-   * =================================================================== */
-  function mount() {
-    loadStore();
-    setupCardInterceptor();
-    
-    document.body.appendChild(fab);
-    document.body.appendChild(restoreBtn);
-    document.body.appendChild(overlay);
-    
-    applyFabConfig();
-    initFabPosition();
-    
-    if (localStorage.getItem('my-audit-fab-hidden') === 'true') {
-      fab.style.display = 'none';
-      restoreBtn.style.display = 'block';
-    } else {
-      fab.style.display = 'flex';
-      restoreBtn.style.display = 'none';
-    }
-    
-    updateFabBadge();
-    try { setInterval(tick, TICK_MS); } catch (e) {}
-  }
-
-  if (document.body) { mount(); } else { document.addEventListener('DOMContentLoaded', mount); }
-
-  /* =====================================================================
-   * 15. 调试接口
-   * =================================================================== */
-  window.CardAudit = {
-    open: openModal,
-    close: closeModal,
-    grabNow: function () {
-      loadStore();
-      const added = grabFromChat();
-      if (added > 0) {
-        unread += added;
-        updateFabBadge();
-        if (overlay.classList.contains('is-open')) { renderPending(); renderCategories(); }
+        return;
       }
-      return added;
-    },
-    getStore: function () { loadStore(); return JSON.parse(JSON.stringify(store)); }
+
+      if (t.matches('[data-role="pending-cat"]')) {
+        var id = t.dataset.id;
+        var item = null;
+        for (var k = 0; k < Store.data.pending.length; k++) {
+          if (Store.data.pending[k].id === id) { item = Store.data.pending[k]; break; }
+        }
+        if (item) { item.category = t.value; Store.save(); }
+        return;
+      }
+
+      if (t.matches('[data-role="set-hidden"]')) {
+        Store.data.settings.isHidden = !!t.checked;
+        Store.save();
+        applyEntryUI();
+        return;
+      }
+
+      if (t.matches('[data-role="import-file"]')) {
+        if (t.files && t.files[0]) importBackup(t.files[0]);
+        t.value = '';
+        return;
+      }
+
+      if (t.matches('[data-role="img-file"]')) {
+        if (t.files && t.files[0]) handleImageFile(t.files[0]);
+        t.value = '';
+        return;
+      }
+
+      if (t.matches('[data-role="set-color"]')) {
+        Store.data.settings.color = t.value;
+        Store.save();
+        applyEntryUI();
+        return;
+      }
+    });
+
+    root.addEventListener('input', function (e) {
+      var t = e.target;
+
+      if (t.matches('[data-role="set-size"]')) {
+        Store.data.settings.size = parseInt(t.value, 10) || 56;
+        var v = root.querySelector('[data-role="size-val"]');
+        if (v) v.textContent = Store.data.settings.size;
+        Store.save();
+        applyEntryUI();
+        return;
+      }
+
+      if (t.matches('[data-role="set-color"]')) {
+        Store.data.settings.color = t.value;
+        Store.save();
+        applyEntryUI();
+        return;
+      }
+    });
+
+    /* ---- 桌面端拖拽排序（手机端使用上移/下移按钮） ---- */
+    var dragSrcCat = null;
+
+    root.addEventListener('dragstart', function (e) {
+      var head = e.target.closest ? e.target.closest('.mac-cat-head') : null;
+      if (!head) return;
+      var catEl = head.parentElement;
+      dragSrcCat = catEl.dataset.cat;
+      try {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', dragSrcCat);
+      } catch (err) {}
+    });
+
+    root.addEventListener('dragover', function (e) {
+      if (!dragSrcCat) return;
+      var over = e.target.closest ? e.target.closest('.mac-cat') : null;
+      if (!over) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'move'; } catch (err) {}
+    });
+
+    root.addEventListener('drop', function (e) {
+      if (!dragSrcCat) return;
+      var over = e.target.closest ? e.target.closest('.mac-cat') : null;
+      dragSrcCat = null;
+      if (!over) return;
+      e.preventDefault();
+
+      var target = over.dataset.cat;
+      var order = Store.data.categoryOrder.slice();
+      var from = order.indexOf(dragSrcCat);
+      if (from === -1) return;
+      order.splice(from, 1);
+      var to = order.indexOf(target);
+      if (to === -1) to = order.length;
+      order.splice(to, 0, dragSrcCat);
+
+      Store.data.categoryOrder = order;
+      Store.save();
+      renderCards();
+    });
+
+    root.addEventListener('dragend', function () {
+      dragSrcCat = null;
+    });
+  }
+
+  /* ---------- 8.3 通用辅助 ---------- */
+  function findPendingById(id) {
+    for (var i = 0; i < Store.data.pending.length; i++) {
+      if (Store.data.pending[i].id === id) return Store.data.pending[i];
+    }
+    return null;
+  }
+
+  function addCardToCategory(name, text) {
+    var d = Store.data;
+    if (!name) name = d.categoryOrder[0] || DEFAULT_CATEGORY;
+    if (!d.categories[name]) {
+      d.categories[name] = [];
+      d.categoryOrder.push(name);
+    }
+    d.categories[name].push({ id: uid(), text: text });
+  }
+
+  function getCheckedIds(catName) {
+    var catEl = findCatEl(catName);
+    if (!catEl) return [];
+    var boxes = catEl.querySelectorAll('.mac-card-check');
+    var ids = [];
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxes[i].checked) ids.push(boxes[i].dataset.id);
+    }
+    return ids;
+  }
+
+  function deleteCategoryForce(name, target) {
+    var d = Store.data;
+    var cards = d.categories[name] || [];
+    if (target && d.categories[target]) {
+      cards.forEach(function (c) {
+        d.categories[target].push({ id: c.id || uid(), text: c.text });
+      });
+    }
+    delete d.categories[name];
+    d.categoryOrder = d.categoryOrder.filter(function (n) { return n !== name; });
+    delete expandedCats[name];
+    Store.save();
+    renderAll();
+    applyEntryUI();
+    toast('分类已删除');
+  }
+
+  /* ---------- 8.4 动作分发 ---------- */
+  async function handleAction(act, btn) {
+    var d = Store.data;
+
+    switch (act) {
+
+      case 'close': {
+        closePanel();
+        break;
+      }
+
+      /* ---------------- 待审核 ---------------- */
+      case 'manual-add': {
+        var ta = panelRoot.querySelector('[data-role="manual-text"]');
+        var text = (ta.value || '').trim();
+        if (!text) { toast('请输入字卡内容'); return; }
+        if (Array.from(text).length > 200) { toast('内容过长（最多 200 字）'); return; }
+        var catSel = panelRoot.querySelector('[data-role="manual-cat"]');
+        var cat = (catSel && catSel.value) || d.categoryOrder[0] || DEFAULT_CATEGORY;
+
+        d.pending.push({
+          id: uid(),
+          text: text,
+          category: cat,
+          sender: '我'          // 核心：手动提交的来源
+        });
+        Store.save();
+        ta.value = '';
+        hideBadge = false;
+        renderAll();
+        updateBadges();
+        toast('已加入待审核（发件人：我）');
+        break;
+      }
+
+      case 'approve': {
+        var pid = btn.dataset.id;
+        var item = findPendingById(pid);
+        if (!item) return;
+        var selEl = panelRoot.querySelector('[data-role="pending-cat"][data-id="' + pid + '"]');
+        var targetCat = selEl ? selEl.value : item.category;
+        addCardToCategory(targetCat, item.text);
+        d.pending = d.pending.filter(function (p) { return p.id !== pid; });
+        Store.save();
+        renderAll();
+        updateBadges();
+        break;
+      }
+
+      case 'reject': {
+        var rid = btn.dataset.id;
+        d.pending = d.pending.filter(function (p) { return p.id !== rid; });
+        Store.save();
+        renderAll();
+        updateBadges();
+        break;
+      }
+
+      case 'approve-all': {
+        if (!d.pending.length) { toast('没有待审核字卡'); return; }
+        var list = d.pending.slice();
+        list.forEach(function (p) {
+          addCardToCategory(p.category, p.text);
+        });
+        d.pending = [];
+        Store.save();
+        renderAll();
+        updateBadges();
+        toast('已全部通过');
+        break;
+      }
+
+      case 'clear-pending': {
+        if (!d.pending.length) return;
+        var okClear = await confirmModal('清空待审核', '确定清空全部待审核字卡吗？此操作不可撤销。', '清空');
+        if (!okClear) return;
+        d.pending = [];
+        Store.save();
+        renderAll();
+        updateBadges();
+        break;
+      }
+
+      /* ---------------- 分类 ---------------- */
+      case 'add-cat': {
+        var input = panelRoot.querySelector('[data-role="new-cat"]');
+        var name = (input.value || '').trim();
+        if (!name) { toast('请输入分类名称'); return; }
+        if (name.length > 20) { toast('分类名过长'); return; }
+        if (d.categories[name]) { toast('该分类已存在'); return; }
+        d.categories[name] = [];
+        d.categoryOrder.push(name);
+        input.value = '';
+        Store.save();
+        renderAll();
+        break;
+      }
+
+      case 'cat-up':
+      case 'cat-down': {
+        var cname = btn.dataset.cat;
+        var idx = d.categoryOrder.indexOf(cname);
+        if (idx === -1) return;
+        var newIdx = act === 'cat-up' ? idx - 1 : idx + 1;
+        if (newIdx < 0 || newIdx >= d.categoryOrder.length) return;
+        var arr = d.categoryOrder.slice();
+        arr.splice(idx, 1);
+        arr.splice(newIdx, 0, cname);
+        d.categoryOrder = arr;
+        Store.save();
+        renderCards();
+        break;
+      }
+
+      case 'cat-toggle': {
+        var tname = btn.dataset.cat;
+        expandedCats[tname] = !expandedCats[tname];
+        renderCards();
+        break;
+      }
+
+      case 'cat-rename': {
+        var oldName = btn.dataset.cat;
+        var newName = await showModal({
+          title: '重命名分类',
+          html: '<input class="mac-input" data-role="rename-input" style="width:100%" value="' +
+            escAttr(oldName) + '">',
+          okText: '保存',
+          onOk: function (rootEl) {
+            var inp = rootEl.querySelector('[data-role="rename-input"]');
+            return (inp.value || '').trim();
+          }
+        });
+        if (!newName || newName === oldName) return;
+        if (d.categories[newName]) { toast('同名分类已存在'); return; }
+        d.categories[newName] = d.categories[oldName] || [];
+        delete d.categories[oldName];
+        d.categoryOrder = d.categoryOrder.map(function (n) {
+          return n === oldName ? newName : n;
+        });
+        d.pending.forEach(function (p) {
+          if (p.category === oldName) p.category = newName;
+        });
+        if (expandedCats[oldName]) {
+          delete expandedCats[oldName];
+          expandedCats[newName] = true;
+        }
+        Store.save();
+        renderAll();
+        break;
+      }
+
+      case 'cat-del': {
+        var delName = btn.dataset.cat;
+        var cards = d.categories[delName] || [];
+        var others = d.categoryOrder.filter(function (n) { return n !== delName; });
+
+        // 空分类：直接确认
+        if (!cards.length) {
+          var okEmpty = await confirmModal('删除分类', '确定删除空分类「' + delName + '」吗？', '删除');
+          if (okEmpty) deleteCategoryForce(delName, null);
+          return;
+        }
+
+        // 唯一分类：确认后连同字卡一起删除
+        if (!others.length) {
+          var okOnly = await confirmModal(
+            '删除分类',
+            '「' + delName + '」是唯一分类且包含 ' + cards.length + ' 张字卡，删除将同时移除这些字卡，确定吗？',
+            '一并删除'
+          );
+          if (okOnly) deleteCategoryForce(delName, null);
+          return;
+        }
+
+        // 非空分类：自定义模态框选择转移目标
+        var moveTo = await showModal({
+          title: '删除分类',
+          html:
+            '<div class="mac-tip">分类「' + esc(delName) + '」下有 <b>' + cards.length +
+            '</b> 张字卡，请选择要转移到的目标分类：</div>' +
+            '<select class="mac-select" data-role="move-target" style="width:100%;margin-top:10px">' +
+              others.map(function (n) {
+                return '<option value="' + escAttr(n) + '">' + esc(n) + '</option>';
+              }).join('') +
+            '</select>',
+          okText: '转移并删除',
+          onOk: function (rootEl) {
+            var s = rootEl.querySelector('[data-role="move-target"]');
+            return s ? s.value : '';
+          }
+        });
+        if (!moveTo) return;
+        deleteCategoryForce(delName, moveTo);
+        break;
+      }
+
+      /* ---------------- 字卡 ---------------- */
+      case 'card-edit': {
+        var ecat = btn.dataset.cat;
+        var eid = btn.dataset.id;
+        var cardList = d.categories[ecat] || [];
+        var card = null;
+        for (var i = 0; i < cardList.length; i++) {
+          if (cardList[i].id === eid) { card = cardList[i]; break; }
+        }
+        if (!card) return;
+
+        var newText = await showModal({
+          title: '编辑字卡',
+          html: '<textarea class="mac-textarea" data-role="edit-text">' + esc(card.text) + '</textarea>',
+          okText: '保存',
+          onOk: function (rootEl) {
+            var t2 = rootEl.querySelector('[data-role="edit-text"]');
+            return (t2.value || '').trim();
+          }
+        });
+        if (!newText) return;
+        card.text = newText;
+        Store.save();
+        renderCards();
+        toast('已保存');
+        break;
+      }
+
+      case 'card-del': {
+        var dcat = btn.dataset.cat;
+        var did = btn.dataset.id;
+        var okDel = await confirmModal('删除字卡', '确定删除这张字卡吗？', '删除');
+        if (!okDel) return;
+        d.categories[dcat] = (d.categories[dcat] || []).filter(function (c) { return c.id !== did; });
+        Store.save();
+        renderCards();
+        break;
+      }
+
+      case 'batch-del': {
+        var bcat = btn.dataset.cat;
+        var ids = getCheckedIds(bcat);
+        if (!ids.length) { toast('请先勾选字卡'); return; }
+        var okBatch = await confirmModal('批量删除', '确定删除选中的 ' + ids.length + ' 张字卡吗？', '删除');
+        if (!okBatch) return;
+        d.categories[bcat] = (d.categories[bcat] || []).filter(function (c) {
+          return ids.indexOf(c.id) === -1;
+        });
+        Store.save();
+        renderCards();
+        toast('已删除 ' + ids.length + ' 张字卡');
+        break;
+      }
+
+      case 'batch-move': {
+        var mcat = btn.dataset.cat;
+        var mids = getCheckedIds(mcat);
+        if (!mids.length) { toast('请先勾选字卡'); return; }
+        var catEl = findCatEl(mcat);
+        var tgtSel = catEl ? catEl.querySelector('[data-role="batch-target"]') : null;
+        var tgt = tgtSel ? tgtSel.value : '';
+        if (!tgt) { toast('没有可转移的目标分类'); return; }
+
+        var moving = (d.categories[mcat] || []).filter(function (c) {
+          return mids.indexOf(c.id) !== -1;
+        });
+        d.categories[mcat] = (d.categories[mcat] || []).filter(function (c) {
+          return mids.indexOf(c.id) === -1;
+        });
+        d.categories[tgt] = (d.categories[tgt] || []).concat(moving);
+        Store.save();
+        renderCards();
+        toast('已转移 ' + moving.length + ' 张字卡到「' + tgt + '」');
+        break;
+      }
+
+      /* ---------------- 设置 ---------------- */
+      case 'upload-img': {
+        var fileInput = panelRoot.querySelector('[data-role="img-file"]');
+        if (fileInput) fileInput.click();
+        break;
+      }
+
+      case 'clear-img': {
+        if (!d.settings.image) { toast('当前没有自定义图片'); return; }
+        d.settings.image = '';
+        Store.save();
+        applyEntryUI();
+        toast('已清除自定义图片');
+        break;
+      }
+
+      case 'reset-pos': {
+        d.settings.position = null;
+        Store.save();
+        applyEntryUI();
+        toast('悬浮球位置已重置');
+        break;
+      }
+
+      case 'export': {
+        exportBackup();
+        break;
+      }
+
+      case 'import': {
+        var imp = panelRoot.querySelector('[data-role="import-file"]');
+        if (imp) imp.click();
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  /* ---------- 8.5 图片上传 ---------- */
+  function handleImageFile(file) {
+    if (!/^image\//.test(file.type)) {
+      toast('请选择图片文件');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast('图片过大（请小于 8MB）');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      openCropModal(String(reader.result), function (dataUrl) {
+        Store.data.settings.image = dataUrl;
+        Store.save();
+        applyEntryUI();
+        toast('图标图片已更新');
+      });
+    };
+    reader.onerror = function () { toast('图片读取失败'); };
+    reader.readAsDataURL(file);
+  }
+
+  /* =======================================================================
+   * 9. 导入 / 导出
+   * ===================================================================== */
+  function exportBackup() {
+    try {
+      var payload = {
+        __app: 'my-audit-cards',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data: {
+          categories: Store.data.categories,
+          categoryOrder: Store.data.categoryOrder,
+          pending: Store.data.pending,
+          settings: Store.data.settings
+        }
+      };
+      var json = JSON.stringify(payload, null, 2);
+      var blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      var stamp = new Date();
+      var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+      a.href = url;
+      a.download = '梦角字卡备份-' + stamp.getFullYear() + pad(stamp.getMonth() + 1) + pad(stamp.getDate()) +
+        '-' + pad(stamp.getHours()) + pad(stamp.getMinutes()) + '.json';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 1500);
+      toast('备份已导出');
+    } catch (e) {
+      toast('导出失败：' + e.message);
+    }
+  }
+
+  function importBackup(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var parsed = JSON.parse(String(reader.result));
+        var payload = (parsed && parsed.data) ? parsed.data : parsed;
+        if (!payload || typeof payload !== 'object') {
+          throw new Error('文件内容不是有效对象');
+        }
+        var normalized = normalizeData(payload);
+        if (!normalized.categoryOrder.length && !normalized.pending.length) {
+          throw new Error('备份中没有任何字卡数据');
+        }
+
+        showModal({
+          title: '导入备份',
+          html: '<div class="mac-tip">导入将<b>覆盖</b>当前所有字卡、待审核与外观设置，确定继续吗？</div>',
+          okText: '覆盖导入',
+          onOk: function () { return true; }
+        }).then(function (ok) {
+          if (!ok) return;
+          Store.data = normalized;
+          Store.save();
+          Store.ensureDefaults();
+          expandedCats = Object.create(null);
+          applyEntryUI();
+          hideBadge = false;
+          if (panelRoot && panelRoot.classList.contains('is-open')) renderAll();
+          updateBadges();
+          toast('导入成功');
+        });
+      } catch (e) {
+        toast('导入失败：' + e.message);
+      }
+    };
+    reader.onerror = function () { toast('文件读取失败'); };
+    reader.readAsText(file);
+  }
+
+  /* =======================================================================
+   * 10. 启动
+   * ===================================================================== */
+  function onResize() {
+    if (!Store.data) return;
+    positionBall();
+    var s = Store.data.settings;
+    if (s.position) {
+      var x = clamp(s.position.x, 0, Math.max(0, window.innerWidth - s.size));
+      var y = clamp(s.position.y, 0, Math.max(0, window.innerHeight - s.size));
+      if (x !== s.position.x || y !== s.position.y) {
+        s.position = { x: x, y: y };
+        Store.save();
+        positionBall();
+      }
+    }
+  }
+
+  function boot() {
+    if (!document.body) {
+      setTimeout(boot, 100);
+      return;
+    }
+
+    Store.load();
+    Store.ensureDefaults();
+
+    injectCSS();
+    createBall();
+    createEdgeBar();
+    applyEntryUI();
+
+    // 低频自动抓取：每 10 分钟一次
+    setInterval(function () {
+      try { autoFetch(); } catch (e) { /* 静默容错 */ }
+    }, FETCH_INTERVAL);
+
+    // 原生图标注入（SPA 页面 DOM 可能延迟渲染，低频重试）
+    setInterval(function () {
+      try { tryInjectNativeIcon(); } catch (e) { /* 静默容错 */ }
+    }, 3000);
+    tryInjectNativeIcon();
+
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+  }
+
+  ready(boot);
+
+  /* ---------- 对外暴露少量调试接口（可选） ---------- */
+  window.MyAuditCards = {
+    open: openPanel,
+    close: closePanel,
+    fetchNow: autoFetch,
+    getData: function () { return Store.data; },
+    export: exportBackup
   };
 })();
