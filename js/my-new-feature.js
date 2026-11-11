@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（完美对齐与形状分离版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（深度克隆精准对齐版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -201,25 +201,19 @@
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
     'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;z-index:10;}',
 
-    /* 仅保留相对定位，其余完全继承原生，放弃任何 display/尺寸设置 */
     '.mac-injected-app .app-ico {',
     '  position: relative !important;',
     '}',
-    '.mac-native-overlay {',
-    '  position: absolute !important;',
-    '  top: 0; left: 0; right: 0; bottom: 0;',
+    '.mac-injected-app .mac-native-text {',
     '  display: flex !important;',
     '  align-items: center !important;',
     '  justify-content: center !important;',
-    '  border-radius: inherit !important;',
-    '  overflow: hidden !important;',
-    '  pointer-events: none;',
-    '}',
-    '.mac-injected-app .mac-native-text {',
-    '  font-size: 24px;',
-    '  font-weight: bold;',
-    '  line-height: 1;',
-    '  pointer-events: none;',
+    '  width: 100% !important;',
+    '  height: 100% !important;',
+    '  font-size: 24px !important;',
+    '  font-weight: bold !important;',
+    '  line-height: 1 !important;',
+    '  pointer-events: none !important;',
     '  transition: opacity .2s;',
     '}',
 
@@ -397,7 +391,7 @@
   }
 
   /* =======================================================================
-   * 5. 图片裁剪（按形状分离）
+   * 5. 图片裁剪
    * ===================================================================== */
   function openCropModal(dataUrl, isRound, cb) {
     if (typeof isRound === 'function') {
@@ -655,6 +649,10 @@
     
     var s = Store.data.settings;
     
+    ico.style.backgroundImage = 'none';
+    ico.style.backgroundColor = 'transparent';
+    ico.style.boxShadow = 'none';
+    
     if (s.appIconImage) {
       ico.style.backgroundImage = 'url("' + s.appIconImage + '")';
       ico.style.backgroundSize = 'cover';
@@ -662,7 +660,6 @@
       ico.style.backgroundColor = 'transparent';
       text.style.opacity = '0';
     } else {
-      ico.style.backgroundImage = 'none';
       ico.style.backgroundColor = s.appIconColor;
       text.style.opacity = '1';
       
@@ -687,14 +684,23 @@
       
       var appNode = document.querySelector('[data-app="mac-audit"]');
       
-      // 如果发现是旧版注入的，销毁重建
-      if (appNode && !appNode.querySelector('.mac-native-overlay')) {
+      // 结构不对则销毁重建
+      if (appNode && !appNode.querySelector('.mac-native-text')) {
         appNode.remove();
         appNode = null;
       }
 
       if (!appNode) {
-        var sampleApp = targetGrid.querySelector('.app');
+        // 1. 找真实模板节点
+        var sampleApp = null;
+        for (var i = 0; i < targetGrid.children.length; i++) {
+          var child = targetGrid.children[i];
+          if (child.classList.contains('app') && child.querySelector('.app-ico')) {
+            sampleApp = child;
+            break;
+          }
+        }
+        
         if (sampleApp) {
           appNode = sampleApp.cloneNode(true);
         } else {
@@ -702,42 +708,42 @@
           appNode.className = 'app';
         }
         
+        // 2. 清理特有属性
         appNode.setAttribute('data-app', 'mac-audit');
         appNode.removeAttribute('data-desk-widget');
         appNode.classList.add('mac-injected-app');
-        
         var withIds = appNode.querySelectorAll('[id]');
-        for (var i = 0; i < withIds.length; i++) withIds[i].removeAttribute('id');
+        for (var k = 0; k < withIds.length; k++) withIds[k].removeAttribute('id');
         
+        // 3. 处理图标区
         var ico = appNode.querySelector('.app-ico');
         if (!ico) {
           ico = document.createElement('div');
           ico.className = 'app-ico';
           appNode.insertBefore(ico, appNode.firstChild);
         }
+        ico.innerHTML = ''; // 暴力清空原有 svg
         
-        // 保留原本的图标（如SVG）以撑开原网页布局，但不可见
-        var svg = ico.querySelector('svg');
-        if (svg) svg.style.visibility = 'hidden';
-        var img = ico.querySelector('img');
-        if (img) img.style.visibility = 'hidden';
+        var textEl = document.createElement('span');
+        textEl.className = 'mac-native-text';
+        textEl.textContent = '审';
+        ico.appendChild(textEl);
         
-        // 插入绝对定位覆盖层
-        var overlay = document.createElement('div');
-        overlay.className = 'mac-native-overlay';
-        overlay.innerHTML = '<span class="mac-native-text">审</span><span class="mac-badge" data-role="ball-badge"></span>';
-        ico.appendChild(overlay);
+        var badge = document.createElement('span');
+        badge.className = 'mac-badge';
+        badge.setAttribute('data-role', 'ball-badge');
+        ico.appendChild(badge);
         
+        // 4. 处理文字区
         var nameEl = appNode.querySelector('.app-name');
-        if (nameEl) {
-          nameEl.textContent = '审核';
-        } else {
-          var n = document.createElement('div');
-          n.className = 'app-name';
-          n.textContent = '审核';
-          appNode.appendChild(n);
+        if (!nameEl) {
+          nameEl = document.createElement('div');
+          nameEl.className = 'app-name';
+          appNode.appendChild(nameEl);
         }
+        nameEl.textContent = '审核';
         
+        // 5. 点击事件
         appNode.addEventListener('click', function (e) {
           e.preventDefault();
           e.stopPropagation();
@@ -745,6 +751,7 @@
         });
       }
 
+      // 6. 维护位置
       var targetIdx = s.iconIndex || 0;
       var children = Array.prototype.slice.call(targetGrid.children).filter(function(el) {
         return el !== appNode;
