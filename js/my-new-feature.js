@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（强化注入与隐藏逻辑）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（精准注入版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -20,19 +20,20 @@
 
   var DEFAULT_SETTINGS = {
     color: '#6c8cff',
-    size: 56,
+    size: 56,         // 悬浮球大小，以及注入图标 app-ico 的大小
     image: '',
-    position: null,   // {x, y} 坐标；null 为默认
-    isHidden: false   // 是否隐藏悬浮球
+    position: null,   // 悬浮球坐标
+    isHidden: false   // 是否隐藏悬浮球（不影响原生注入图标）
   };
 
   // 救命后门：检测 URL 中是否含有 ?show_audit=true
   var isForceShow = false;
   try {
-    if (window.location.search.indexOf('show_audit=true') !== -1) {
-      isForceShow = true;
-    }
-  } catch (e) {}
+    var searchParams = new URLSearchParams(window.location.search);
+    isForceShow = searchParams.get('show_audit') === 'true';
+  } catch (e) {
+    isForceShow = /(?:\?|&)show_audit=true(?:&|$)/.test(window.location.search);
+  }
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -185,22 +186,29 @@
     '.mac-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;',
     'border-radius:9px;background:#ff3b30;color:#fff;font-size:11px;line-height:18px;text-align:center;',
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
-    'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;}',
+    'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;z-index:10;}',
 
-    /* ---------- 原生图标注入 ---------- */
-    '.mac-native-icon{position:relative;cursor:pointer;box-sizing:border-box;display:flex!important;',
-    'flex-direction:column;align-items:center;justify-content:center;box-shadow:none!important;',
-    'background:transparent;padding:0;margin:0;}',
-    '.mac-native-inner{position:relative;display:inline-flex;align-items:center;justify-content:center;',
-    'width:44px;height:44px;border-radius:50%;background:#6c8cff;color:#fff;font-size:16px;font-weight:700;',
-    'background-size:cover;background-position:center;background-repeat:no-repeat;overflow:visible;',
-    'box-shadow:none!important;border:none;}',
-    '.mac-native-label{display:block;font-size:11px;line-height:1.4;margin-top:4px;text-align:center;',
-    'color:inherit;opacity:.85;pointer-events:none;}',
-    
-    /* ---------- 降级固定图标 ---------- */
-    '.mac-fallback-icon {position:fixed;top:15px;right:15px;z-index:2147483000;background:rgba(255,255,255,0.95);',
-    'border:1px solid #eef0f5;border-radius:12px;padding:6px 8px;box-shadow:none!important;}',
+    /* ---------- 原生图标精准注入样式 ---------- */
+    /* 强制覆盖掉原网页可能存在的阴影、边框，确保显示正常 */
+    '.mac-injected-app .app-ico {',
+    '  position: relative !important;',
+    '  display: flex !important;',
+    '  align-items: center !important;',
+    '  justify-content: center !important;',
+    '  background-size: cover !important;',
+    '  background-position: center !important;',
+    '  background-repeat: no-repeat !important;',
+    '  box-shadow: none !important;',
+    '  border: none !important;',
+    '  overflow: visible !important;',
+    '  border-radius: 20px !important;', /* 适配常见的 APP 图标圆角 */
+    '}',
+    '.mac-injected-app .mac-native-text {',
+    '  font-weight: bold;',
+    '  line-height: 1;',
+    '  pointer-events: none;',
+    '  transition: opacity .2s;',
+    '}',
 
     /* ---------- 面板 ---------- */
     '.mac-overlay{position:fixed;inset:0;background:rgba(15,20,35,.45);z-index:2147483600;display:none;',
@@ -507,14 +515,12 @@
   }
 
   /* =======================================================================
-   * 6. 入口：悬浮球 / 原生图标
+   * 6. 入口：悬浮球与精准注入九宫格图标
    * ===================================================================== */
   var ball = null;
-  var nativeIconEl = null;
   var hideBadge = false;
-  var bootTime = Date.now();
 
-  /* ---------- 6.1 悬浮球 ---------- */
+  // 创建悬浮球
   function createBall() {
     if (ball) return;
     ball = document.createElement('div');
@@ -594,175 +600,77 @@
     }
   }
 
-  /* ---------- 6.2 寻找并构建原生图标 ---------- */
-  function findGrid() {
-    // 加入了你截图里出现的特征文字
-    var keywords = ['番茄钟', '心意市集', '备忘录', '梦角档案', '经期记录', '吃什么', '聊天', '信件'];
-    var allEls = document.querySelectorAll('div');
-    var bestGrid = null;
-    var maxScore = -1;
-    
-    for (var i = 0; i < allEls.length; i++) {
-      var el = allEls[i];
-      var txt = el.textContent || '';
-      if (txt.length > 300) continue;
-      
-      var matchCount = 0;
-      for (var j = 0; j < keywords.length; j++) {
-        if (txt.indexOf(keywords[j]) !== -1) matchCount++;
-      }
-      if (matchCount < 2) continue; // 至少包含两个关键词才认作目标网格
-      
-      // 向上寻找
-      var p = el;
-      for (var d = 0; d < 6 && p; d++) {
-        var kids = p.children;
-        if (kids && kids.length >= 6 && kids.length <= 20) {
-          var validKids = 0;
-          for (var k = 0; k < kids.length; k++) {
-            var kText = (kids[k].textContent || '').trim();
-            if (kText.length > 0 && kText.length < 30) validKids++;
-          }
-          if (validKids >= 6) {
-            var score = validKids + matchCount * 2;
-            if (score > maxScore) {
-              maxScore = score;
-              bestGrid = p;
-            }
-            break; 
-          }
-        }
-        p = p.parentElement;
-      }
-    }
-    return bestGrid;
-  }
-
-  function buildNativeIcon(grid) {
-    var sample = grid.children[0];
-    var node;
-    if (sample && /^(DIV|LI|A|BUTTON|SPAN)$/i.test(sample.tagName)) {
-      node = sample.cloneNode(true);
-      node.removeAttribute('id');
-      var withId = node.querySelectorAll('[id]');
-      for (var i = 0; i < withId.length; i++) withId[i].removeAttribute('id');
-      var withClick = node.querySelectorAll('[onclick]');
-      for (var j = 0; j < withClick.length; j++) withClick[j].removeAttribute('onclick');
-      node.innerHTML = '';
-    } else {
-      node = document.createElement('div');
-    }
-
-    node.setAttribute('data-mac-native-icon', '1');
-    node.classList.add('mac-native-icon');
-
-    node.innerHTML =
-      '<span class="mac-native-inner">' +
-        '<span class="mac-native-text">审</span>' +
-        '<span class="mac-badge" data-role="ball-badge"></span>' +
-      '</span>' +
-      '<span class="mac-native-label">审核</span>';
-
-    node.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      openPanel();
-    }, true);
-
-    grid.appendChild(node);
-    return node;
-  }
-
-  /* ---------- 6.3 降级方案（固定右上角） ---------- */
-  function createFallbackNativeIcon() {
-    if (document.querySelector('[data-mac-fallback-icon]')) {
-      return document.querySelector('[data-mac-fallback-icon]');
-    }
-    var node = document.createElement('div');
-    node.setAttribute('data-mac-fallback-icon', '1');
-    node.className = 'mac-native-icon mac-fallback-icon';
-    
-    node.innerHTML =
-      '<span class="mac-native-inner" style="background:#6c8cff;border-radius:50%;">' +
-        '<span class="mac-native-text">审</span>' +
-        '<span class="mac-badge" data-role="ball-badge"></span>' +
-      '</span>' +
-      '<span class="mac-native-label" style="color:#3a4152;">审核</span>';
-
-    node.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      openPanel();
-    }, true);
-
-    document.body.appendChild(node);
-    return node;
-  }
-
+  // 更新注入图标的外观
   function updateNativeIcon() {
-    if (!nativeIconEl) return;
+    var node = document.querySelector('[data-app="mac-audit"]');
+    if (!node) return;
+    var ico = node.querySelector('.app-ico');
+    var text = node.querySelector('.mac-native-text');
+    if (!ico || !text) return;
+    
     var s = Store.data.settings;
-    var inner = nativeIconEl.querySelector('.mac-native-inner');
-    var text = nativeIconEl.querySelector('.mac-native-text');
-    if (!inner) return;
-
-    var size = clamp(s.size, 36, 72);
-    inner.style.width = size + 'px';
-    inner.style.height = size + 'px';
-    inner.style.fontSize = Math.round(size * 0.38) + 'px';
-
+    
+    // 强制设定尺寸，避免原网页样式干扰
+    ico.style.width = s.size + 'px';
+    ico.style.height = s.size + 'px';
+    
     if (s.image) {
-      inner.style.backgroundImage = 'url("' + s.image + '")';
-      inner.style.backgroundSize = 'cover';
-      inner.style.backgroundPosition = 'center';
-      inner.style.backgroundColor = 'transparent';
-      if (text) text.style.opacity = '0';
+      ico.style.backgroundImage = 'url("' + s.image + '")';
+      ico.style.backgroundSize = 'cover';
+      ico.style.backgroundPosition = 'center';
+      ico.style.backgroundColor = 'transparent';
+      text.style.opacity = '0';
     } else {
-      inner.style.backgroundImage = 'none';
-      inner.style.backgroundColor = s.color;
-      if (text) text.style.opacity = '1';
+      ico.style.backgroundImage = 'none';
+      ico.style.backgroundColor = s.color;
+      text.style.opacity = '1';
+      text.style.color = '#ffffff'; // 简单处理，白字配深色底
     }
+    text.style.fontSize = Math.round(s.size * 0.45) + 'px';
   }
 
+  // 寻找精准容器并注入
   function tryInjectNativeIcon() {
     try {
-      var grid = findGrid();
-      if (grid) {
-        // 如果有网格，优先塞进网格。清理掉降级按钮
-        var fallback = document.querySelector('[data-mac-fallback-icon]');
-        if (fallback) fallback.remove();
+      var grid = document.querySelector('.app-grid.p3-grid');
+      if (!grid) return;
 
-        var existing = grid.querySelector('[data-mac-native-icon]');
-        if (existing) {
-          nativeIconEl = existing;
-          updateNativeIcon();
-          updateBadges();
-          return;
-        }
-        nativeIconEl = buildNativeIcon(grid);
+      // 防止重复注入
+      if (grid.querySelector('[data-app="mac-audit"]')) {
         updateNativeIcon();
         updateBadges();
-      } else {
-        // 如果没找到网格
-        if (!nativeIconEl || !document.body.contains(nativeIconEl)) {
-          nativeIconEl = null;
-          // 延迟 3 秒降级，防网页还没加载完
-          if (Date.now() - bootTime > 3000) {
-            nativeIconEl = createFallbackNativeIcon();
-            updateNativeIcon();
-            updateBadges();
-          }
-        } else {
-          updateNativeIcon();
-          updateBadges();
-        }
+        return;
       }
+
+      // 创建完全符合你提供的 DOM 结构的元素
+      var appNode = document.createElement('div');
+      appNode.className = 'app mac-injected-app';
+      appNode.setAttribute('data-app', 'mac-audit');
+      
+      appNode.innerHTML = `
+        <div class="app-ico">
+          <span class="mac-native-text">审</span>
+          <span class="mac-badge" data-role="ball-badge"></span>
+        </div>
+        <div class="app-name">审核</div>
+      `;
+
+      appNode.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openPanel();
+      });
+
+      grid.appendChild(appNode);
+      
+      updateNativeIcon();
+      updateBadges();
     } catch (e) {
       /* 静默容错 */
     }
   }
 
-  /* ---------- 6.4 角标与外观 ---------- */
+  // 更新角标 (悬浮球和原生图标共享)
   function updateBadges() {
     var n = Store.data.pending.length;
     var nodes = document.querySelectorAll('[data-role="ball-badge"]');
@@ -777,10 +685,11 @@
     }
   }
 
+  // 核心应用界面逻辑：处理显示与隐藏
   function applyEntryUI() {
     var s = Store.data.settings;
     
-    // 1. 悬浮球逻辑：仅受 isHidden 控制，但被 URL 后门强制覆盖
+    // 1. 悬浮球逻辑：受 isHidden 控制，但被 URL 后门强制覆盖
     if (ball) {
       var shouldShowBall = !s.isHidden || isForceShow;
       ball.style.display = shouldShowBall ? 'flex' : 'none';
@@ -795,13 +704,13 @@
       positionBall();
     }
 
-    // 2. 原生图标逻辑：永远不隐藏（提供唯一的常规入口）
-    tryInjectNativeIcon();
+    // 2. 九宫格图标逻辑：永远显示，作为常驻入口
+    updateNativeIcon();
     updateBadges();
   }
 
   /* =======================================================================
-   * 7. 自动抓取（保留原有稳健逻辑）
+   * 7. 自动抓取
    * ===================================================================== */
   function pickTimestamp(m) {
     var keys = ['time', 'timestamp', 'createdAt', 'created_at', 'ts', 'date', 'sendTime'];
@@ -1724,10 +1633,8 @@
     injectCSS();
 
     createBall();
-    // 首次尝试注入和获取状态
     applyEntryUI();
     
-    // 如果有 URL 后门，打开时给个 Toast 提示
     if (isForceShow) {
       setTimeout(function () { toast('已通过 URL 强制显示悬浮球'); }, 1000);
     }
@@ -1736,10 +1643,10 @@
       try { autoFetch(); } catch (e) {}
     }, FETCH_INTERVAL);
 
-    // 持续尝试注入原生图标（应对 SPA 的延迟渲染）
+    // 由于是 SPA，页面可能有延迟渲染，每 1.5 秒检查一次九宫格是否就绪
     setInterval(function () {
       try { tryInjectNativeIcon(); } catch (e) {}
-    }, 3000);
+    }, 1500);
 
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
