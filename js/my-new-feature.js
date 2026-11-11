@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（深度克隆精准对齐版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（最终完美版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -14,8 +14,7 @@
   var LS_KEY = 'my-audit-cards';
   var CHAT_KEY = 'xy-home-v2:default:chat-msgs';
   var MAX_PENDING = 5;
-  var FETCH_INTERVAL = 10 * 60 * 1000;
-  var FETCH_PROBABILITY = 0.9;
+  var FETCH_INTERVAL = 30 * 60 * 1000; // 30 分钟执行一次
   var DEFAULT_CATEGORY = '未分类';
 
   var DEFAULT_SETTINGS = {
@@ -391,14 +390,40 @@
   }
 
   /* =======================================================================
-   * 5. 图片裁剪
+   * 5. 图片裁剪与压缩
    * ===================================================================== */
+  function compressImage(file) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var img = new Image();
+        img.onload = function() {
+          var maxSize = 512;
+          var w = img.width;
+          var h = img.height;
+          if (w <= maxSize && h <= maxSize) {
+            resolve(e.target.result);
+            return;
+          }
+          var ratio = Math.min(maxSize / w, maxSize / h);
+          var newW = Math.floor(w * ratio);
+          var newH = Math.floor(h * ratio);
+          var canvas = document.createElement('canvas');
+          canvas.width = newW;
+          canvas.height = newH;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, newW, newH);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = function() { reject(new Error('Image parse error')); };
+        img.src = e.target.result;
+      };
+      reader.onerror = function() { reject(new Error('File read error')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
   function openCropModal(dataUrl, isRound, cb) {
-    if (typeof isRound === 'function') {
-      cb = isRound;
-      isRound = true;
-    }
-    
     var V = 280;
     var overlay = document.createElement('div');
     overlay.className = 'mac-modal-overlay';
@@ -675,23 +700,42 @@
 
   function tryInjectNativeIcon() {
     try {
-      var grids = document.querySelectorAll('.app-grid.p3-grid');
-      if (!grids.length) return;
+      var slides = document.querySelectorAll('.page-slide');
+      if (!slides.length) {
+        slides = document.querySelectorAll('.app-grid.p3-grid');
+      }
+      if (!slides.length) return;
 
       var s = Store.data.settings;
-      var pageIdx = Math.min(Math.max(s.iconPage || 0, 0), grids.length - 1);
-      var targetGrid = grids[pageIdx];
+      var pageIdx = Math.min(Math.max(s.iconPage || 0, 0), slides.length - 1);
+      var targetContainer = slides[pageIdx];
+      
+      // 找目标容器里的网格
+      var targetGrid = null;
+      if (targetContainer.classList.contains('app-grid') || targetContainer.classList.contains('p3-grid')) {
+        targetGrid = targetContainer;
+      } else {
+        targetGrid = targetContainer.querySelector('.app-grid') || targetContainer.querySelector('[class*="grid"]');
+      }
+      
+      // 如果没找到，尝试找有多个 .app 子元素的父容器
+      if (!targetGrid) {
+        var apps = targetContainer.querySelectorAll('.app');
+        if (apps.length > 0) {
+          targetGrid = apps[0].parentElement;
+        }
+      }
+      
+      if (!targetGrid) return;
       
       var appNode = document.querySelector('[data-app="mac-audit"]');
       
-      // 结构不对则销毁重建
       if (appNode && !appNode.querySelector('.mac-native-text')) {
         appNode.remove();
         appNode = null;
       }
 
       if (!appNode) {
-        // 1. 找真实模板节点
         var sampleApp = null;
         for (var i = 0; i < targetGrid.children.length; i++) {
           var child = targetGrid.children[i];
@@ -708,21 +752,19 @@
           appNode.className = 'app';
         }
         
-        // 2. 清理特有属性
         appNode.setAttribute('data-app', 'mac-audit');
         appNode.removeAttribute('data-desk-widget');
         appNode.classList.add('mac-injected-app');
         var withIds = appNode.querySelectorAll('[id]');
         for (var k = 0; k < withIds.length; k++) withIds[k].removeAttribute('id');
         
-        // 3. 处理图标区
         var ico = appNode.querySelector('.app-ico');
         if (!ico) {
           ico = document.createElement('div');
           ico.className = 'app-ico';
           appNode.insertBefore(ico, appNode.firstChild);
         }
-        ico.innerHTML = ''; // 暴力清空原有 svg
+        ico.innerHTML = '';
         
         var textEl = document.createElement('span');
         textEl.className = 'mac-native-text';
@@ -734,7 +776,6 @@
         badge.setAttribute('data-role', 'ball-badge');
         ico.appendChild(badge);
         
-        // 4. 处理文字区
         var nameEl = appNode.querySelector('.app-name');
         if (!nameEl) {
           nameEl = document.createElement('div');
@@ -743,7 +784,6 @@
         }
         nameEl.textContent = '审核';
         
-        // 5. 点击事件
         appNode.addEventListener('click', function (e) {
           e.preventDefault();
           e.stopPropagation();
@@ -751,7 +791,6 @@
         });
       }
 
-      // 6. 维护位置
       var targetIdx = s.iconIndex || 0;
       var children = Array.prototype.slice.call(targetGrid.children).filter(function(el) {
         return el !== appNode;
@@ -803,10 +842,10 @@
   }
 
   /* =======================================================================
-   * 7. 自动抓取
+   * 7. 自动抓取（带日志与拟人化）
    * ===================================================================== */
   function pickTimestamp(m) {
-    var keys = ['time', 'timestamp', 'createdAt', 'created_at', 'ts', 'date', 'sendTime'];
+    var keys = ['time', 'timestamp', 'ts', 'createdAt', 'created_at', 'date', 'sendTime'];
     for (var i = 0; i < keys.length; i++) {
       var c = m[keys[i]];
       if (typeof c === 'number' && isFinite(c)) {
@@ -833,22 +872,52 @@
     return '';
   }
 
-  function autoFetch() {
-    if (!(Math.random() > FETCH_PROBABILITY)) return;
+  function autoFetch(isManual) {
+    if (isManual) {
+      console.log('[梦角字卡] 💡 收到手动触发指令，无视概率强制开始抓取...');
+    }
 
     var raw = null;
     try { raw = localStorage.getItem(CHAT_KEY); } catch (e) { return; }
-    if (!raw) return;
+    if (!raw) {
+      if (isManual) console.log('[梦角字卡] ❌ 未找到聊天记录 (localStorage 为空)');
+      return;
+    }
 
     var msgs = null;
-    try { msgs = JSON.parse(raw); } catch (e) { return; }
-    if (!Array.isArray(msgs) || !msgs.length) return;
+    try { msgs = JSON.parse(raw); } catch (e) { 
+      if (isManual) console.log('[梦角字卡] ❌ 聊天记录 JSON 解析失败');
+      return; 
+    }
+    
+    if (!Array.isArray(msgs) || !msgs.length) {
+      if (isManual) console.log('[梦角字卡] ❌ 聊天记录数组为空');
+      return;
+    }
 
     var d = Store.data;
-    if (d.pending.length >= MAX_PENDING) return;
+    if (d.pending.length >= MAX_PENDING) {
+      if (isManual) console.log('[梦角字卡] ⏸️ 待审核积压已满 (5条)，暂时停止抓取');
+      return;
+    }
+
+    // 拟人化概率
+    var hasLoveWord = msgs.some(function(m) {
+      var txt = pickText(m);
+      return /喜欢|爱|想你|开心|抱抱|亲亲/.test(txt);
+    });
+    
+    if (!isManual) {
+      var threshold = hasLoveWord ? 0.7 : 0.95;
+      if (!(Math.random() > threshold)) {
+        return;
+      }
+    }
+
+    if (isManual) console.log('[梦角字卡] 🚀 开始扫描 ' + msgs.length + ' 条消息...');
 
     var now = Date.now();
-    var WINDOW = 10 * 60 * 1000;
+    var WINDOW = 15 * 60 * 1000; // 15 分钟
 
     var known = Object.create(null);
     d.pending.forEach(function (p) { known[p.text] = 1; });
@@ -862,28 +931,53 @@
     });
 
     for (var i = 0; i < msgs.length; i++) {
-      if (d.pending.length >= MAX_PENDING) break;
+      if (d.pending.length >= MAX_PENDING) {
+        if (isManual) console.log('  ⏸️ 抓取已满 5 条，中断循环');
+        break;
+      }
 
       var m = msgs[i];
       if (!m || typeof m !== 'object') continue;
-      if (m.side !== 'out') continue;
+
+      if (m.side !== 'out') {
+        if (isManual) console.log('  [跳过] 不是 out 方向 (句:', pickText(m).slice(0,10) + '...)');
+        continue;
+      }
 
       var ts = pickTimestamp(m);
       if (hasAnyTimestamp) {
-        if (ts === null) continue;
-        if (now - ts > WINDOW) continue;
-        if (ts - now > 60 * 1000) continue;
+        if (ts === null) {
+          if (isManual) console.log('  [跳过] 无有效时间戳');
+          continue;
+        }
+        if (now - ts > WINDOW) {
+          if (isManual) console.log('  [跳过] 超过 15 分钟', pickText(m));
+          continue;
+        }
+        if (ts - now > 60 * 1000) {
+          if (isManual) console.log('  [跳过] 未来时间', pickText(m));
+          continue;
+        }
       } else {
-        if (i < msgs.length - 15) continue;
+        if (i < msgs.length - 20) {
+          if (isManual) console.log('  [跳过] 无时间戳，仅在末尾20条中查找');
+          continue;
+        }
       }
 
       var text = pickText(m);
       if (!text) continue;
 
       var len = Array.from(text).length;
-      if (len < 5 || len > 35) continue;
+      if (len < 5 || len > 35) {
+        if (isManual) console.log('  [跳过] 字数不在范围 (', len, '字):', text);
+        continue;
+      }
 
-      if (known[text]) continue;
+      if (known[text]) {
+        if (isManual) console.log('  [跳过] 已存在:', text);
+        continue;
+      }
       known[text] = 1;
 
       d.pending.push({
@@ -893,6 +987,7 @@
         sender: '梦角'
       });
       added++;
+      if (isManual) console.log('  [✅ 抓取]', text);
     }
 
     if (added > 0) {
@@ -900,6 +995,9 @@
       hideBadge = false;
       refreshUI();
       toast('已静默收录 ' + added + ' 条字卡');
+      if (isManual) console.log('[梦角字卡] 🎉 抓取完成，共收录 ' + added + ' 条');
+    } else {
+      if (isManual) console.log('[梦角字卡] 扫描结束，没有符合条件的新消息。');
     }
   }
 
@@ -1696,10 +1794,10 @@
 
   function handleImageFile(file, type) {
     if (!/^image\//.test(file.type)) { toast('请选择图片文件'); return; }
-    if (file.size > 8 * 1024 * 1024) { toast('图片过大（请小于 8MB）'); return; }
-    var reader = new FileReader();
-    reader.onload = function () {
-      openCropModal(String(reader.result), type === 'ball', function (dataUrl) {
+    if (file.size > 10 * 1024 * 1024) { toast('图片过大（请小于 10MB）'); return; }
+    
+    compressImage(file).then(function(compressedDataUrl) {
+      openCropModal(compressedDataUrl, type === 'ball', function (dataUrl) {
         if (type === 'ball') {
           Store.data.settings.ballImage = dataUrl;
         } else {
@@ -1709,9 +1807,9 @@
         applyEntryUI();
         toast('图片已更新');
       });
-    };
-    reader.onerror = function () { toast('图片读取失败'); };
-    reader.readAsDataURL(file);
+    }).catch(function() {
+      toast('图片处理失败');
+    });
   }
 
   /* =======================================================================
@@ -1792,7 +1890,7 @@
   }
 
   /* =======================================================================
-   * 10. 启动
+   * 10. 启动与监听
    * ===================================================================== */
   function onResize() {
     if (!Store.data) return;
@@ -1809,6 +1907,20 @@
     }
   }
 
+  function setupObserver() {
+    if (window.__mac_observer_attached) return;
+    window.__mac_observer_attached = true;
+    
+    var observer = new MutationObserver(function(mutations) {
+      // 防抖处理，避免过度重排
+      if (window.__mac_inject_timer) clearTimeout(window.__mac_inject_timer);
+      window.__mac_inject_timer = setTimeout(function() {
+        tryInjectNativeIcon();
+      }, 250);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
   function boot() {
     if (!document.body) {
       setTimeout(boot, 100);
@@ -1821,18 +1933,15 @@
 
     createBall();
     applyEntryUI();
+    setupObserver(); // 初始化监听
     
     if (isForceShow) {
       setTimeout(function () { toast('已通过 URL 强制显示悬浮球'); }, 1000);
     }
 
     setInterval(function () {
-      try { autoFetch(); } catch (e) {}
+      try { autoFetch(false); } catch (e) {}
     }, FETCH_INTERVAL);
-
-    setInterval(function () {
-      try { tryInjectNativeIcon(); } catch (e) {}
-    }, 1500);
 
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
@@ -1843,7 +1952,7 @@
   window.MyAuditCards = {
     open: openPanel,
     close: closePanel,
-    fetchNow: autoFetch,
+    fetchNow: function() { autoFetch(true); },
     getData: function () { return Store.data; },
     export: exportBackup
   };
