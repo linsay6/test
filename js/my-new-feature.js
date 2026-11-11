@@ -1,6 +1,7 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 终极完整版（无刷新发送 + 双人共管）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 终极完整版
+ * (包含：自动抓取、AI捣乱、自动抽卡发送、一键发送、无刷新兜底)
  * ========================================================================= */
 (function () {
   'use strict';
@@ -65,7 +66,7 @@
   }
 
   /* =======================================================================
-   * 2. 数据层处理 (规范化、本地存储)
+   * 2. 数据层处理
    * ===================================================================== */
   function normalizeCard(item) {
     if (!item) return null;
@@ -401,11 +402,13 @@
   }
 
   /* =======================================================================
-   * 5. 核心：无刷新注入消息 (一键静默发送)
+   * 5. 核心：静默发送与防打断刷新
    * ===================================================================== */
-        function injectFakeMessage(text, side) {
+  function injectFakeMessage(text, side, shouldReload) {
     side = side || 'out';
-    console.log('[梦角字卡] 🚀 触发一键静默发送...');
+    shouldReload = shouldReload !== false;
+    
+    console.log('[梦角字卡] 🚀 触发静默发送...');
     
     var raw = null;
     try { raw = localStorage.getItem(CHAT_KEY); } catch (e) {}
@@ -413,135 +416,50 @@
     if (raw) { try { msgs = JSON.parse(raw); } catch(e) {} }
     if (!Array.isArray(msgs)) msgs = [];
     
-    var template = msgs.length > 0 ? msgs[msgs.length - 1] : {};
-    var newMsg = {};
-    if (Object.keys(template).length > 0) {
-      for (var k in template) { newMsg[k] = template[k]; }
-    }
-    
-    var now = Date.now();
-    newMsg.text = text;
-    newMsg.content = text;
-    newMsg.msg = text;
-    newMsg.side = side;
-    newMsg.time = now;
-    newMsg.timestamp = now;
-    newMsg.ts = now;
-    newMsg.id = uid();
+    // 精准组装消息格式
+    var newMsg = {
+        side: side,
+        text: text,
+        time: Date.now()
+    };
     
     msgs.push(newMsg);
     try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs)); } catch(e) {}
-    console.log('[梦角字卡] 消息已写入 LocalStorage，尝试触发UI更新...');
+    console.log('[梦角字卡] ✅ 消息已写入 LocalStorage:', newMsg);
 
     // 1. 尝试调用全局函数
     var rendered = false;
     var fnNames = ['loadMsgs', 'renderChat', 'renderWindow', 'loadChat', 'refreshChat', 'updateChat', 'fetchMsgs'];
     fnNames.forEach(function(fn) {
       if (typeof window[fn] === 'function') {
-        try { window[fn](); rendered = true; console.log('[梦角字卡] ✅ 成功调用全局函数更新聊天: window.' + fn); } catch (e) {}
+        try { window[fn](); rendered = true; } catch (e) {}
       }
     });
 
     // 2. 尝试派发事件
-    try {
-      window.dispatchEvent(new Event('storage'));
-      window.dispatchEvent(new Event('chatUpdated'));
-      window.dispatchEvent(new CustomEvent('newMessage', { detail: newMsg }));
-      console.log('[梦角字卡] 📡 已尝试派发 storage / chatUpdated / newMessage 事件。');
-    } catch(e){}
-
-    // 3. DOM 兜底（保持最纯粹的结构克隆，绝不删骨架元素）
     if (!rendered) {
-      var list = document.querySelector('.chat-msgs, .chat-list, #chat-body, .chat-content, [class*="msg-list"], [class*="chat-box"], [class*="message-list"], [class*="msg-container"]');
-      
-      if (list && list.children.length > 0) {
-        // 找最合适克隆的行（从后往前找，避开系统通知如“撤回”、“通话”）
-        var row = null;
-        for (var i = list.children.length - 1; i >= 0; i--) {
-            var el = list.children[i];
-            if (el.hasAttribute('data-mac-injected')) continue;
-            if (el.textContent.indexOf('通话') > -1 || el.textContent.indexOf('撤回') > -1) continue;
-            if (el.textContent.trim().length > 0) {
-                row = el; break;
-            }
-        }
-        // 实在不行就取最后一行
-        if (!row) row = list.lastElementChild;
+      try {
+        window.dispatchEvent(new Event('storage'));
+        window.dispatchEvent(new CustomEvent('newMessage', { detail: newMsg }));
+      } catch(e){}
+    }
 
-        var bubble = row.cloneNode(true);
-        bubble.setAttribute('data-mac-injected', 'true');
-        bubble.removeAttribute('id');
-        var withIds = bubble.querySelectorAll('[id]');
-        for(var j=0; j<withIds.length; j++) withIds[j].removeAttribute('id');
-
-        // 获取当前时间字符串 (HH:MM)
-        var nowTime = new Date();
-        var timeStr = String(nowTime.getHours()).padStart(2, '0') + ':' + String(nowTime.getMinutes()).padStart(2, '0');
-
-        // 精准替换文本节点，保留图片和结构
-        var textNodes = [];
-        var walk = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT, null, false);
-        var node;
-        while(node = walk.nextNode()) { textNodes.push(node); }
-        
-        var replacedMain = false;
-        for (var t = 0; t < textNodes.length; t++) {
-           var n = textNodes[t];
-           var val = n.nodeValue.trim();
-           if (!val) continue;
-           
-           // 如果看起来像时间 (如 12:34)，更新为当前时间
-           if (/^\d{1,2}:\d{2}/.test(val)) {
-               n.nodeValue = n.nodeValue.replace(val, timeStr);
-           } 
-           // 把最长的文本或者还没被替换的普通文本，替换为我们的内容
-           else if (val.length > 2 && !replacedMain && !/^[\d\s:]+$/.test(val)) {
-               n.nodeValue = text;
-               replacedMain = true;
-           }
-        }
-
-        // 如果实在没找到文本节点，或者没替换成功，直接塞进最内层元素
-        if (!replacedMain) {
-            var contentBox = bubble.querySelector('[class*="content"], [class*="text"], [class*="bubble"]');
-            if (contentBox && contentBox !== bubble) {
-                contentBox.textContent = text;
-            } else {
-                bubble.appendChild(document.createTextNode(text));
-            }
-        }
-
-        // 强制调整左右对齐
-        if (side === 'out') { 
-            bubble.classList.add('out', 'right', 'self', 'is-me'); 
-            bubble.classList.remove('in', 'left', 'other', 'is-other'); 
-            bubble.style.alignSelf = 'flex-end';
-            bubble.style.justifyContent = 'flex-end';
-            if (window.getComputedStyle(bubble).display === 'flex') {
-                bubble.style.flexDirection = 'row-reverse';
-            }
-        } else { 
-            bubble.classList.add('in', 'left', 'other', 'is-other'); 
-            bubble.classList.remove('out', 'right', 'self', 'is-me'); 
-            bubble.style.alignSelf = 'flex-start';
-            bubble.style.justifyContent = 'flex-start';
-            if (window.getComputedStyle(bubble).display === 'flex') {
-                bubble.style.flexDirection = 'row';
-            }
-        }
-
-        list.appendChild(bubble);
-        var scrollTarget = list.closest('[style*="overflow"]') || list.parentElement || list;
-        scrollTarget.scrollTop = scrollTarget.scrollHeight;
-        
-        console.log('[梦角字卡] ⚠️ 未找到全局函数，已通过极简克隆插入消息。');
-        toast('已通过极简克隆插入消息');
-      } else {
-        console.warn('[梦角字卡] ❌ 更新失败：未找到全局函数，也未找到聊天列表容器。');
-        toast('刷新失败，详见控制台');
-      }
-    } else {
+    if (rendered) {
       toast('已通过原网页接口发送消息');
+    } else {
+      // 3. 兜底刷新（防打断机制）
+      if (shouldReload) {
+        var activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') && activeEl.value.trim() !== '') {
+            toast('消息已发送！但检测到你正在输入，请发送完当前消息后手动刷新查看');
+            return;
+        }
+        
+        toast('发送成功，即将刷新页面以更新聊天...');
+        setTimeout(function() { location.reload(); }, 800);
+      } else {
+        toast('已写入本地，请刷新页面查看消息');
+      }
     }
   }
 
@@ -549,7 +467,7 @@
   window.MyAuditCards.sendMsg = injectFakeMessage;
 
   /* =======================================================================
-   * 6. 自动抓取与 AI 自主意识
+   * 6. 自动抓取与 AI 自主意识 (含自动抽卡发送)
    * ===================================================================== */
   function pickTimestamp(m) {
     var keys = ['time', 'timestamp', 'ts', 'createdAt', 'created_at', 'date', 'sendTime'];
@@ -570,8 +488,9 @@
     return '';
   }
 
+  // AI 自主捣乱（2%概率发起删改禁）
   function tryAIExtracurricular() {
-    if (Math.random() > 0.02) return; // 2% 概率触发捣乱
+    if (Math.random() > 0.02) return;
     var d = Store.data;
     if (d.pending.length >= MAX_PENDING) return;
 
@@ -602,9 +521,32 @@
     }
   }
 
+  // AI 自动主动发送字卡（10%概率直接发消息）
+  function tryAISelfTalk() {
+    if (Math.random() > 0.10) return; // 10% 概率
+
+    var d = Store.data;
+    var allCards = [];
+    d.categoryOrder.forEach(function(cat) {
+      (d.categories[cat] || []).forEach(function(card) {
+        if (!card.isDisabled) allCards.push(card.text);
+      });
+    });
+
+    if (allCards.length === 0) return;
+    
+    // 随机抽一张发送给用户 (side: 'in')
+    var randomText = allCards[Math.floor(Math.random() * allCards.length)];
+    console.log('[梦角字卡] 🌟 梦角主动发消息:', randomText);
+    injectFakeMessage(randomText, 'in', true);
+  }
+
   function autoFetch(isManual) {
     if (isManual) console.log('[梦角字卡] 💡 收到手动触发指令，无视概率强制开始抓取...');
-    else tryAIExtracurricular();
+    else {
+      tryAIExtracurricular();
+      tryAISelfTalk(); // 触发自动发送
+    }
 
     var raw = null; try { raw = localStorage.getItem(CHAT_KEY); } catch (e) { return; }
     if (!raw) { if (isManual) console.log('[梦角字卡] ❌ 未找到聊天记录'); return; }
@@ -950,7 +892,18 @@
     var items = cards.map(function (c) {
       var disabledClass = c.isDisabled ? ' mac-card-disabled' : '';
       var recoverBtn = c.isDisabled ? '<button class="mac-mini mac-mini-primary" data-act="card-recover" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '">恢复</button>' : '';
-      return '<div class="mac-card" data-id="' + escAttr(c.id) + '"><input type="checkbox" class="mac-card-check" data-id="' + escAttr(c.id) + '"><span class="mac-card-text' + disabledClass + '">' + esc(c.text) + '</span>' + recoverBtn + '<button class="mac-mini" data-act="card-edit" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '">编辑</button><button class="mac-mini mac-mini-danger" data-act="card-del" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '">删除</button></div>';
+      
+      // 核心：给字卡加上纸飞机发送按钮
+      var sendBtn = c.isDisabled ? '' : '<button class="mac-mini" data-act="card-send" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '" title="发送给梦角">✈️ 发送</button>';
+
+      return '<div class="mac-card" data-id="' + escAttr(c.id) + '">' +
+               '<input type="checkbox" class="mac-card-check" data-id="' + escAttr(c.id) + '">' +
+               '<span class="mac-card-text' + disabledClass + '">' + esc(c.text) + '</span>' +
+               sendBtn +
+               recoverBtn + 
+               '<button class="mac-mini" data-act="card-edit" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '">编辑</button>' +
+               '<button class="mac-mini mac-mini-danger" data-act="card-del" data-cat="' + escAttr(name) + '" data-id="' + escAttr(c.id) + '">删除</button>' +
+             '</div>';
     }).join('');
 
     return '<div class="mac-batchbar"><label class="mac-check"><input type="checkbox" data-role="select-all"> 全选</label><button class="mac-mini" data-act="batch-del" data-cat="' + escAttr(name) + '">批量删除</button><select class="mac-select mac-select-sm" data-role="batch-target">' + opts + '</select><button class="mac-mini" data-act="batch-move" data-cat="' + escAttr(name) + '">批量转移</button></div><div class="mac-card-list">' + items + '</div>';
@@ -1113,7 +1066,7 @@
       case 'test-send': {
         var input = panelRoot.querySelector('[data-role="test-msg"]');
         var txt = (input.value || '').trim();
-        if (txt) injectFakeMessage(txt, 'out');
+        if (txt) injectFakeMessage(txt, 'out', true); // 测试手动发送
         break;
       }
 
@@ -1214,6 +1167,20 @@
         if (!others.length) { if (await confirmModal('删除分类', '「' + delName + '」是唯一分类且包含 ' + cards.length + ' 张字卡，删除将同时移除这些字卡，确定吗？', '一并删除')) deleteCategoryForce(delName, null); return; }
         var moveTo = await showModal({ title: '删除分类', html: '<div class="mac-tip">分类「' + esc(delName) + '」下有 <b>' + cards.length + '</b> 张字卡，请选择要转移到的目标分类：</div><select class="mac-select" data-role="move-target" style="width:100%;margin-top:10px">' + others.map(function (n) { return '<option value="' + escAttr(n) + '">' + esc(n) + '</option>'; }).join('') + '</select>', okText: '转移并删除', onOk: function (rootEl) { return rootEl.querySelector('[data-role="move-target"]').value; } });
         if (!moveTo) return; deleteCategoryForce(delName, moveTo);
+        break;
+      }
+
+      case 'card-send': {
+        var scat = btn.dataset.cat;
+        var sid = btn.dataset.id;
+        var scardList = d.categories[scat] || [];
+        var scard = null;
+        for (var i = 0; i < scardList.length; i++) {
+          if (scardList[i].id === sid) { scard = scardList[i]; break; }
+        }
+        if (!scard) return;
+        // 作为梦角发送 (side: 'in')，并自动刷新
+        injectFakeMessage(scard.text, 'in', true);
         break;
       }
 
@@ -1343,7 +1310,10 @@
     Store.load(); Store.ensureDefaults(); injectCSS();
     createBall(); applyEntryUI(); setupObserver();
     if (isForceShow) setTimeout(function () { toast('已通过 URL 强制显示悬浮球'); }, 1000);
+    
+    // 定时执行抓取与主动发消息
     setInterval(function () { try { autoFetch(false); } catch (e) {} }, FETCH_INTERVAL);
+    
     window.addEventListener('resize', onResize); window.addEventListener('orientationchange', onResize);
   }
 
@@ -1352,7 +1322,7 @@
   window.MyAuditCards = {
     open: openPanel,
     close: closePanel,
-    fetchNow: function() { autoFetch(true); },
+    fetchNow: function() { autoFetch(true); }, // 在控制台手动触发抓取
     sendMsg: injectFakeMessage,
     getData: function () { return Store.data; },
     export: exportBackup
