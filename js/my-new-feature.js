@@ -1,6 +1,6 @@
 /* ============================================================================
- * my-new-feature.js 性能极致版
- * 修复：1. 解决加载严重卡顿（废弃重度Observer） 2. 角标样式继承原网页 3. 彻底隐藏空角标
+ * my-new-feature.js 终极完美版
+ * 修复：1. 移除图片丝滑秒切 2. 彻底恢复原生默认图标 3. requestAnimationFrame 极限同步加载
  * ========================================================================== */
 (function () {
   'use strict';
@@ -34,7 +34,6 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
-  /* --- 性能保护：拦截 localStorage 防覆盖，但不引起卡顿 --- */
   (function hookLocalStorage() {
     try {
       var originalSetItem = localStorage.setItem;
@@ -42,7 +41,6 @@
         if (key === LS_KEY_CHAT && INJECTED_MSGS.length > 0 && typeof value === 'string') {
           try {
             var lastMsg = INJECTED_MSGS[INJECTED_MSGS.length - 1];
-            // 快速字符串检查，避免深度解析 JSON
             if (value.indexOf(lastMsg.text) === -1) {
               var msgs = JSON.parse(value);
               if (Array.isArray(msgs)) {
@@ -267,7 +265,6 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        /* 核心修复 1：角标样式微调与空状态彻底隐藏 */
         '#ma-app-icon{position:relative;cursor:pointer;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff;display:none;align-items:center;justify-content:center;color:#333;font-size:11px;font-weight:600;border:1px solid #e0e0e0;box-shadow:0 1px 3px rgba(0,0,0,0.15);z-index:10;box-sizing:border-box;transform:scale(0.95);}',
         '#ma-app-icon .ma-app-dot.on{display:flex;}',
@@ -348,18 +345,18 @@
     }, 'injectAppIcon', false);
   }
 
-  /* 核心修复 2：轻量级轮询，彻底告别卡顿 */
-  function startAppIconLightPolling() {
+  /* 核心修复：改用 requestAnimationFrame 极限同步加载 */
+  function startAppIconRAF() {
     safe(function () {
-      if (injectAppIcon()) return; // 如果已经有了，直接跳过
+      if (injectAppIcon()) return;
       var tries = 0;
-      var timer = setInterval(function () {
+      function check() {
         tries++;
-        if (injectAppIcon() || tries > 50) {
-          clearInterval(timer);
-        }
-      }, 200);
-    }, 'startAppIconLightPolling');
+        if (injectAppIcon() || tries > 300) return; // 300帧约5秒，防止死循环
+        requestAnimationFrame(check);
+      }
+      requestAnimationFrame(check);
+    }, 'startAppIconRAF');
   }
 
   function applyVisibility() {
@@ -396,6 +393,15 @@
       if (APP_ICON_EL && s.appImage) {
         var holder = APP_ICON_IMG_EL || APP_ICON_EL;
         try { if (holder.tagName === 'IMG') holder.src = s.appImage; else if (holder.tagName === 'SVG') { APP_ICON_EL.style.backgroundImage = 'url("' + s.appImage + '")'; APP_ICON_EL.style.backgroundSize = 'cover'; APP_ICON_EL.style.backgroundPosition = 'center'; } else { holder.style.backgroundImage = 'url("' + s.appImage + '")'; holder.style.backgroundSize = 'cover'; holder.style.backgroundPosition = 'center'; } } catch (e) {}
+      } else if (APP_ICON_EL && !s.appImage) {
+        // 彻底恢复默认图标
+        try { 
+            APP_ICON_EL.style.backgroundImage = ''; 
+            if (APP_ICON_IMG_EL) {
+                if (APP_ICON_IMG_EL.tagName === 'IMG') APP_ICON_IMG_EL.removeAttribute('src');
+                else APP_ICON_IMG_EL.style.backgroundImage = '';
+            }
+        } catch (e) {}
       }
     }, 'applyAppearance');
   }
@@ -743,12 +749,49 @@
 
   function bindSettingsEvents(body) {
     safe(function () {
-      var c = body.querySelector('#ma-set-color'); if (c) { c.addEventListener('input', function () { safe(function () { DB.settings.ballColor = c.value; var t = body.querySelector('#ma-set-ball-thumb'); if (t && !DB.settings.ballImage) t.style.background = c.value; applyAppearance(); }, 'colorIn'); }); c.addEventListener('change', function () { saveData(); applyAppearance(); renderPanelBody(); }); }
+      var c = body.querySelector('#ma-set-color'); if (c) { c.addEventListener('input', function () { safe(function () { DB.settings.ballColor = c.value; var t = body.querySelector('#ma-set-ball-thumb'); if (t && !DB.settings.ballImage) t.style.background = c.value; applyAppearance(); }, 'colorIn'); }); c.addEventListener('change', function () { saveData(); applyAppearance(); }); }
       var sz = body.querySelector('#ma-set-size'), szv = body.querySelector('#ma-set-size-val'); if (sz) { sz.addEventListener('input', function () { safe(function () { var v = clamp(parseInt(sz.value, 10) || 52, 36, 88); DB.settings.ballSize = v; if (szv) szv.textContent = v + 'px'; applyAppearance(); applyFabPosition(); }, 'sizeIn'); }); sz.addEventListener('change', function () { saveData(); }); }
-      var bu = body.querySelector('#ma-set-ball-upload'); if (bu) bu.addEventListener('click', function () { openCropper({ title: '裁剪悬浮球', shape: 'circle', onConfirm: function (d) { safe(function () { DB.settings.ballImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'ballImg'); } }); });
-      var bc = body.querySelector('#ma-set-ball-clear'); if (bc) bc.addEventListener('click', function () { safe(function () { DB.settings.ballImage = ''; saveData(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'ballClr'); });
-      var au = body.querySelector('#ma-set-app-upload'); if (au) au.addEventListener('click', function () { openCropper({ title: '裁剪图标', shape: 'square', onConfirm: function (d) { safe(function () { DB.settings.appImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'appImg'); } }); });
-      var ac = body.querySelector('#ma-set-app-clear'); if (ac) ac.addEventListener('click', function () { safe(function () { DB.settings.appImage = ''; saveData(); refreshAppIcon(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'appClr'); });
+      
+      var bu = body.querySelector('#ma-set-ball-upload'); 
+      if (bu) bu.addEventListener('click', function () { openCropper({ title: '裁剪悬浮球', shape: 'circle', onConfirm: function (d) { safe(function () { DB.settings.ballImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'ballImg'); } }); });
+      
+      var bc = body.querySelector('#ma-set-ball-clear'); 
+      if (bc) bc.addEventListener('click', function () { 
+          safe(function () { 
+              DB.settings.ballImage = ''; 
+              saveData(); 
+              applyAppearance(); 
+              var t = body.querySelector('#ma-set-ball-thumb'); 
+              if (t) { t.style.backgroundImage = ''; t.style.background = DB.settings.ballColor; }
+              bc.style.display = 'none';
+              toast('已移除悬浮球图片'); 
+          }, 'ballClr'); 
+      });
+      
+      var au = body.querySelector('#ma-set-app-upload'); 
+      if (au) au.addEventListener('click', function () { openCropper({ title: '裁剪图标', shape: 'square', onConfirm: function (d) { safe(function () { DB.settings.appImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'appImg'); } }); });
+      
+      var ac = body.querySelector('#ma-set-app-clear'); 
+      if (ac) ac.addEventListener('click', function () { 
+          safe(function () { 
+              DB.settings.appImage = ''; 
+              saveData(); 
+              
+              // 彻底恢复原生图标状态
+              if (APP_ICON_EL) APP_ICON_EL.style.backgroundImage = '';
+              if (APP_ICON_IMG_EL) {
+                  if (APP_ICON_IMG_EL.tagName === 'IMG') APP_ICON_IMG_EL.removeAttribute('src');
+                  else APP_ICON_IMG_EL.style.backgroundImage = '';
+              }
+              
+              // 局部更新 UI
+              var t = body.querySelector('#ma-set-app-thumb'); 
+              if (t) { t.style.backgroundImage = ''; t.style.background = '#f5f5f5'; }
+              ac.style.display = 'none';
+              toast('已恢复默认审核图标'); 
+          }, 'appClr'); 
+      });
+      
       var hd = body.querySelector('#ma-set-hide'); if (hd) hd.addEventListener('click', function () { safe(function () { DB.settings.hideAll = !DB.settings.hideAll; saveData(); hd.classList.toggle('on', DB.settings.hideAll); applyVisibility(); toast(DB.settings.hideAll ? '悬浮球已隐藏，可通过原生图标恢复' : '悬浮球已恢复'); }, 'hideSet'); });
       
       var exp = body.querySelector('#ma-export'); if (exp) exp.addEventListener('click', function () { safe(function () { var blob = new Blob([JSON.stringify({ __ma_backup: true, exportedAt: Date.now(), data: DB }, null, 2)], { type: 'application/json' }); var url = URL.createObjectURL(blob), a = document.createElement('a'), d = new Date(); a.href = url; a.download = 'audit-backup-' + d.getTime() + '.json'; document.body.appendChild(a); a.click(); setTimeout(function () { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e) {} }, 200); toast('已导出'); }, 'export'); });
@@ -807,11 +850,10 @@
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; FAB.style.left = clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)) + 'px'; FAB.style.top = clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) + 'px'; }, 'resize'); }); }
     
-    startAppIconLightPolling(); // 轻量级轮询，不卡顿
+    startAppIconRAF(); // 核心修复：requestAnimationFrame 极限同步
     startEngine(); 
     startGuard();
     
-    // 极轻量的页面切换监听，不使用 MutationObserver 深度监听，改用定时器检查
     setInterval(function() {
         if (document.getElementById('chat-body')) {
             checkAndRepairChat();
