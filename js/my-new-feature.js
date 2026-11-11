@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（完美对齐与圆角裁剪版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（完美对齐与形状分离版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -18,7 +18,6 @@
   var FETCH_PROBABILITY = 0.9;
   var DEFAULT_CATEGORY = '未分类';
 
-  // 数据隔离：ball* 控制悬浮球，app* 控制原生图标
   var DEFAULT_SETTINGS = {
     ballColor: '#6c8cff',
     ballSize: 56,
@@ -33,7 +32,6 @@
     iconIndex: 0
   };
 
-  // 救命后门
   var isForceShow = false;
   try {
     var searchParams = new URLSearchParams(window.location.search);
@@ -203,20 +201,22 @@
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
     'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;z-index:10;}',
 
-    /* 彻底清理外挂样式，100%继承原生布局 */
+    /* 仅保留相对定位，其余完全继承原生，放弃任何 display/尺寸设置 */
     '.mac-injected-app .app-ico {',
     '  position: relative !important;',
+    '}',
+    '.mac-native-overlay {',
+    '  position: absolute !important;',
+    '  top: 0; left: 0; right: 0; bottom: 0;',
     '  display: flex !important;',
     '  align-items: center !important;',
     '  justify-content: center !important;',
-    '  background-size: cover !important;',
-    '  background-position: center !important;',
-    '  background-repeat: no-repeat !important;',
-    '  box-shadow: none !important;',
-    '  border: none !important;',
+    '  border-radius: inherit !important;',
     '  overflow: hidden !important;',
+    '  pointer-events: none;',
     '}',
     '.mac-injected-app .mac-native-text {',
+    '  font-size: 24px;',
     '  font-weight: bold;',
     '  line-height: 1;',
     '  pointer-events: none;',
@@ -311,8 +311,7 @@
     '.mac-modal-body{font-size:13px;color:#4a5163;line-height:1.6;}',
     '.mac-modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;}',
     '.mac-crop-stage{display:flex;align-items:center;justify-content:center;margin-bottom:12px;}',
-    /* 圆角矩形预览 */
-    '.mac-crop-canvas{border-radius:22%;touch-action:none;cursor:grab;background:#f2f4f8;max-width:100%;}',
+    '.mac-crop-canvas{touch-action:none;cursor:grab;background:#f2f4f8;max-width:100%;}',
     '.mac-crop-zoom{width:100%;accent-color:#6c8cff;}',
 
     '.mac-toast{position:fixed;left:50%;bottom:64px;transform:translate(-50%,20px);background:rgba(30,36,52,.92);',
@@ -398,16 +397,24 @@
   }
 
   /* =======================================================================
-   * 5. 图片裁剪（圆角矩形）
+   * 5. 图片裁剪（按形状分离）
    * ===================================================================== */
-  function openCropModal(dataUrl, cb) {
+  function openCropModal(dataUrl, isRound, cb) {
+    if (typeof isRound === 'function') {
+      cb = isRound;
+      isRound = true;
+    }
+    
     var V = 280;
     var overlay = document.createElement('div');
     overlay.className = 'mac-modal-overlay';
+    
+    var canvasStyle = isRound ? 'border-radius: 50%;' : 'border-radius: 22%;';
+    
     overlay.innerHTML =
       '<div class="mac-modal">' +
         '<div class="mac-modal-title">调整图标图片</div>' +
-        '<div class="mac-crop-stage"><canvas class="mac-crop-canvas" width="' + V + '" height="' + V + '"></canvas></div>' +
+        '<div class="mac-crop-stage"><canvas class="mac-crop-canvas" style="' + canvasStyle + '" width="' + V + '" height="' + V + '"></canvas></div>' +
         '<input class="mac-crop-zoom" type="range" min="1" max="3" step="0.01" value="1">' +
         '<div class="mac-modal-footer">' +
           '<button class="mac-btn" data-crop="cancel">取消</button>' +
@@ -437,7 +444,6 @@
     };
     img.src = dataUrl;
 
-    // 圆角矩形绘制工具
     function drawRoundedRect(c, x, y, width, height, radius) {
       c.beginPath();
       c.moveTo(x + radius, y);
@@ -455,8 +461,16 @@
     function draw() {
       ctx.clearRect(0, 0, V, V);
       ctx.save();
-      drawRoundedRect(ctx, 1, 1, V - 2, V - 2, V * 0.22);
-      ctx.clip();
+      
+      if (isRound) {
+        ctx.beginPath();
+        ctx.arc(V / 2, V / 2, V / 2 - 1, 0, Math.PI * 2);
+        ctx.clip();
+      } else {
+        drawRoundedRect(ctx, 1, 1, V - 2, V - 2, V * 0.22);
+        ctx.clip();
+      }
+      
       ctx.fillStyle = '#f2f4f8';
       ctx.fillRect(0, 0, V, V);
       if (ready) {
@@ -467,7 +481,12 @@
       }
       ctx.restore();
       
-      drawRoundedRect(ctx, 1, 1, V - 2, V - 2, V * 0.22);
+      ctx.beginPath();
+      if (isRound) {
+        ctx.arc(V / 2, V / 2, V / 2 - 1, 0, Math.PI * 2);
+      } else {
+        drawRoundedRect(ctx, 1, 1, V - 2, V - 2, V * 0.22);
+      }
       ctx.strokeStyle = 'rgba(0,0,0,.18)';
       ctx.lineWidth = 2;
       ctx.stroke();
@@ -517,8 +536,16 @@
       var octx = out.getContext('2d');
       octx.clearRect(0, 0, OUT, OUT);
       octx.save();
-      drawRoundedRect(octx, 0, 0, OUT, OUT, OUT * 0.22);
-      octx.clip();
+      
+      if (isRound) {
+        octx.beginPath();
+        octx.arc(OUT / 2, OUT / 2, OUT / 2, 0, Math.PI * 2);
+        octx.clip();
+      } else {
+        drawRoundedRect(octx, 0, 0, OUT, OUT, OUT * 0.22);
+        octx.clip();
+      }
+      
       var k = OUT / V;
       var s = baseScale * zoom;
       var w = img.width * s * k;
@@ -630,13 +657,15 @@
     
     if (s.appIconImage) {
       ico.style.backgroundImage = 'url("' + s.appIconImage + '")';
+      ico.style.backgroundSize = 'cover';
+      ico.style.backgroundPosition = 'center';
       ico.style.backgroundColor = 'transparent';
       text.style.opacity = '0';
     } else {
       ico.style.backgroundImage = 'none';
       ico.style.backgroundColor = s.appIconColor;
       text.style.opacity = '1';
-      // 动态判断背景颜色明暗，自动调整文字颜色
+      
       var hex = s.appIconColor.replace('#', '');
       if (hex.length === 3) hex = hex.split('').map(function(c) { return c+c; }).join('');
       var r = parseInt(hex.substr(0, 2), 16) || 0;
@@ -658,17 +687,57 @@
       
       var appNode = document.querySelector('[data-app="mac-audit"]');
       
+      // 如果发现是旧版注入的，销毁重建
+      if (appNode && !appNode.querySelector('.mac-native-overlay')) {
+        appNode.remove();
+        appNode = null;
+      }
+
       if (!appNode) {
-        appNode = document.createElement('div');
-        appNode.className = 'app mac-injected-app';
+        var sampleApp = targetGrid.querySelector('.app');
+        if (sampleApp) {
+          appNode = sampleApp.cloneNode(true);
+        } else {
+          appNode = document.createElement('div');
+          appNode.className = 'app';
+        }
+        
         appNode.setAttribute('data-app', 'mac-audit');
-        appNode.innerHTML = `
-          <div class="app-ico">
-            <span class="mac-native-text">审</span>
-            <span class="mac-badge" data-role="ball-badge"></span>
-          </div>
-          <div class="app-name">审核</div>
-        `;
+        appNode.removeAttribute('data-desk-widget');
+        appNode.classList.add('mac-injected-app');
+        
+        var withIds = appNode.querySelectorAll('[id]');
+        for (var i = 0; i < withIds.length; i++) withIds[i].removeAttribute('id');
+        
+        var ico = appNode.querySelector('.app-ico');
+        if (!ico) {
+          ico = document.createElement('div');
+          ico.className = 'app-ico';
+          appNode.insertBefore(ico, appNode.firstChild);
+        }
+        
+        // 保留原本的图标（如SVG）以撑开原网页布局，但不可见
+        var svg = ico.querySelector('svg');
+        if (svg) svg.style.visibility = 'hidden';
+        var img = ico.querySelector('img');
+        if (img) img.style.visibility = 'hidden';
+        
+        // 插入绝对定位覆盖层
+        var overlay = document.createElement('div');
+        overlay.className = 'mac-native-overlay';
+        overlay.innerHTML = '<span class="mac-native-text">审</span><span class="mac-badge" data-role="ball-badge"></span>';
+        ico.appendChild(overlay);
+        
+        var nameEl = appNode.querySelector('.app-name');
+        if (nameEl) {
+          nameEl.textContent = '审核';
+        } else {
+          var n = document.createElement('div');
+          n.className = 'app-name';
+          n.textContent = '审核';
+          appNode.appendChild(n);
+        }
+        
         appNode.addEventListener('click', function (e) {
           e.preventDefault();
           e.stopPropagation();
@@ -1207,7 +1276,6 @@
         return;
       }
       
-      // 颜色变化事件
       if (t.matches('[data-role="set-ball-color"]')) {
         Store.data.settings.ballColor = t.value;
         Store.save();
@@ -1624,7 +1692,7 @@
     if (file.size > 8 * 1024 * 1024) { toast('图片过大（请小于 8MB）'); return; }
     var reader = new FileReader();
     reader.onload = function () {
-      openCropModal(String(reader.result), function (dataUrl) {
+      openCropModal(String(reader.result), type === 'ball', function (dataUrl) {
         if (type === 'ball') {
           Store.data.settings.ballImage = dataUrl;
         } else {
