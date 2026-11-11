@@ -1,7 +1,6 @@
 /* ============================================================================
  * my-new-feature.js 终极完美版
- * 修复：1. 原生图标数字角标 2. 气泡强制左对齐 3. 装修模式属性注入 
- *       4. 批量换行提交审核 5. 批量同意/拒绝待审核
+ * 修复：1. 增加去重按钮 2. 修复抓取并发上限 3. 修复 Tab 遮挡 4. 待审核支持批量勾选
  * ========================================================================== */
 (function () {
   'use strict';
@@ -35,7 +34,7 @@
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
   function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', hideAll: false, ballPos: null }; }
-  function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0 } }; }
+  function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0, isGrabbing: false } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
     if (!Array.isArray(d.groups)) d.groups = [];
@@ -56,7 +55,7 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
-    if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta; if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0; if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0; if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = []; if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400);
+    if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta; if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0; if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0; if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = []; if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400); if (typeof d.meta.isGrabbing !== 'boolean') d.meta.isGrabbing = false;
     return d;
   }
   function loadData() { return safe(function () { var raw = localStorage.getItem(LS_KEY_DATA); if (!raw) return defaultData(); return normalizeData(JSON.parse(raw)); }, 'loadData', defaultData()); }
@@ -67,15 +66,12 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  /* 核心修复：强制克隆左侧气泡并保证左对齐 */
   function injectBubbleToChat(text) {
     try {
       var msgs = readChatMsgs(); msgs.push({ side: 'in', text: text, time: Date.now() }); writeChatMsgs(msgs);
       var chatBody = document.getElementById('chat-body');
       if (!chatBody) { console.warn('[审计] 找不到 #chat-body'); return false; }
       var children = Array.from(chatBody.children), templateNode = null;
-      
-      // 第一遍：寻找干净的对方普通文字气泡（跳过复杂分析卡片，跳过右侧气泡）
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
@@ -83,29 +79,15 @@
         if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0 || txt.indexOf('情绪 ') >= 0) continue; 
         if (txt.trim().length > 0) { templateNode = el; break; }
       }
-
       if (!templateNode) { console.warn('[审计] 找不到可克隆的对方气泡节点'); return false; }
       var clone = templateNode.cloneNode(true);
       if (clone.id) clone.removeAttribute('id');
       var nodesWithId = clone.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
-      
-      // 清理可能导致右对齐的类名
-      if (clone.classList) {
-        clone.classList.remove('msg-out', 'me', 'right', 'self');
-        // 强行加入一般原网页会用的左侧类名，如有冲突也无妨
-        clone.classList.add('msg-in', 'left');
-      }
-      
-      // 暴力覆写行内样式，强制靠左
-      clone.style.alignSelf = 'flex-start';
-      clone.style.marginLeft = '0';
-      clone.style.marginRight = 'auto';
-
-      // 替换文本
+      if (clone.classList) { clone.classList.remove('msg-out', 'me', 'right', 'self'); clone.classList.add('msg-in', 'left'); }
+      clone.style.alignSelf = 'flex-start'; clone.style.marginLeft = '0'; clone.style.marginRight = 'auto';
       var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
       while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
       if (targetTextNode) targetTextNode.nodeValue = text; else clone.innerText = text;
-      
       chatBody.appendChild(clone);
       try { chatBody.scrollTop = chatBody.scrollHeight; if (chatBody.parentNode) chatBody.parentNode.scrollTop = chatBody.parentNode.scrollHeight; window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
       return true;
@@ -117,26 +99,34 @@
   
   function grabFromChat() {
     safe(function () {
-      if (!DB || autoPendingCount() >= MAX_AUTO_PENDING) return;
-      var msgs = readChatMsgs(), now = Date.now(), cands = [];
-      for (var i = 0; i < msgs.length; i++) {
-        var m = msgs[i]; if (!m || typeof m !== 'object' || m.side !== 'out' || typeof m.text !== 'string') continue;
-        var t = m.text.trim(), len = t.length; if (len < MIN_LEN || len > MAX_LEN) continue;
-        var tm = Number(m.time) || 0; if (!tm || now - tm > RECENT_MS || now - tm < -60000) continue;
-        var key = t + '@@' + tm; if (DB.meta.grabbedKeys.indexOf(key) >= 0) continue;
-        cands.push({ text: t, time: tm, key: key });
+      if (!DB || DB.meta.isGrabbing) return; // 并发锁
+      if (autoPendingCount() >= MAX_AUTO_PENDING) return;
+      
+      DB.meta.isGrabbing = true;
+      try {
+        var msgs = readChatMsgs(), now = Date.now(), cands = [];
+        for (var i = 0; i < msgs.length; i++) {
+          var m = msgs[i]; if (!m || typeof m !== 'object' || m.side !== 'out' || typeof m.text !== 'string') continue;
+          var t = m.text.trim(), len = t.length; if (len < MIN_LEN || len > MAX_LEN) continue;
+          var tm = Number(m.time) || 0; if (!tm || now - tm > RECENT_MS || now - tm < -60000) continue;
+          var key = t + '@@' + tm; if (DB.meta.grabbedKeys.indexOf(key) >= 0) continue;
+          cands.push({ text: t, time: tm, key: key });
+        }
+        if (!cands.length) { DB.meta.isGrabbing = false; return; } 
+        cands.sort(function () { return Math.random() - 0.5; });
+        var added = 0;
+        for (var j = 0; j < cands.length; j++) {
+          if (added >= MAX_GRAB_PER_TICK || autoPendingCount() + added >= MAX_AUTO_PENDING) break;
+          var c = cands[j], emo = isEmotional(c.text), pass = emo ? (Math.random() > 0.7) : (Math.random() > 0.95);
+          DB.meta.grabbedKeys.push(c.key); if (!pass) continue;
+          DB.pending.push({ id: uid('p'), action: 'add', text: c.text, cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: '', toGroupName: '', sender: SENDER_MJ, auto: true, emo: emo, time: Date.now(), status: 'pending', note: emo ? '含情感词' : '常规抓取' });
+          added++;
+        }
+        if (DB.meta.grabbedKeys.length > 400) DB.meta.grabbedKeys = DB.meta.grabbedKeys.slice(-400);
+        DB.meta.lastGrabAt = Date.now();
+      } finally {
+        DB.meta.isGrabbing = false;
       }
-      if (!cands.length) return; cands.sort(function () { return Math.random() - 0.5; });
-      var added = 0;
-      for (var j = 0; j < cands.length; j++) {
-        if (added >= MAX_GRAB_PER_TICK || autoPendingCount() + added >= MAX_AUTO_PENDING) break;
-        var c = cands[j], emo = isEmotional(c.text), pass = emo ? (Math.random() > 0.7) : (Math.random() > 0.95);
-        DB.meta.grabbedKeys.push(c.key); if (!pass) continue;
-        DB.pending.push({ id: uid('p'), action: 'add', text: c.text, cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: '', toGroupName: '', sender: SENDER_MJ, auto: true, emo: emo, time: Date.now(), status: 'pending', note: emo ? '含情感词' : '常规抓取' });
-        added++;
-      }
-      if (DB.meta.grabbedKeys.length > 400) DB.meta.grabbedKeys = DB.meta.grabbedKeys.slice(-400);
-      DB.meta.lastGrabAt = Date.now();
     }, 'grabFromChat');
   }
   
@@ -180,8 +170,10 @@
         '#ma-app-icon .ma-app-dot{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;border:1px solid #fff;z-index:10;}','#ma-app-icon .ma-app-dot.on{display:flex;}',
         '#ma-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;}','#ma-mask.on{display:flex;}',
         '#ma-panel{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;color:#222;line-height:1.5;box-shadow:0 12px 40px rgba(0,0,0,.22);}',
-        '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;}','.ma-title{font-size:16px;font-weight:700;}','.ma-close{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#999;cursor:pointer;}','.ma-close:hover{background:#eee;color:#333;}',
-        '.ma-tabs{display:flex;border-bottom:1px solid #eee;background:#fff;overflow-x:auto;}','.ma-tab{flex:1 0 auto;padding:10px 12px;text-align:center;cursor:pointer;font-size:13px;color:#666;white-space:nowrap;position:relative;border-bottom:2px solid transparent;}','.ma-tab.on{color:#ff4d6d;border-bottom-color:#ff4d6d;font-weight:600;}','.ma-tab-badge{display:inline-block;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;color:#fff;font-size:10px;margin-left:4px;font-weight:600;vertical-align:middle;}',
+        '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;flex-shrink:0;}',
+        '.ma-title{font-size:16px;font-weight:700;}','.ma-close{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#999;cursor:pointer;}','.ma-close:hover{background:#eee;color:#333;}',
+        '.ma-tabs{display:flex;border-bottom:1px solid #eee;background:#fff;overflow-x:auto;flex-shrink:0;}',
+        '.ma-tab{flex:1 0 auto;padding:10px 12px;text-align:center;cursor:pointer;font-size:13px;color:#666;white-space:nowrap;position:relative;border-bottom:2px solid transparent;}','.ma-tab.on{color:#ff4d6d;border-bottom-color:#ff4d6d;font-weight:600;}','.ma-tab-badge{display:inline-block;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;color:#fff;font-size:10px;margin-left:4px;font-weight:600;vertical-align:middle;}',
         '.ma-body{flex:1;overflow-y:auto;padding:12px 14px 20px;}','.ma-btn{display:inline-flex;align-items:center;justify-content:center;padding:6px 14px;border-radius:8px;border:1px solid #ddd;background:#fff;color:#333;font-size:13px;cursor:pointer;line-height:1.4;white-space:nowrap;}','.ma-btn:hover{background:#f6f6f6;}','.ma-btn.primary{background:#ff4d6d;border-color:#ff4d6d;color:#fff;}','.ma-btn.danger{background:#fff;border-color:#ffb3c0;color:#e0355a;}','.ma-btn.sm{padding:3px 9px;font-size:12px;border-radius:6px;}',
         '.ma-input,.ma-select,.ma-textarea{width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;color:#222;background:#fff;outline:none;font-family:inherit;}','.ma-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;}','.ma-empty{text-align:center;color:#bbb;padding:40px 10px;font-size:13px;}',
         '.ma-pending-item{border:1px solid #f0f0f0;border-radius:12px;padding:10px 12px;margin-bottom:10px;}','.ma-pending-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}','.ma-act-tag{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:600;background:#eef4ff;color:#2b6cff;}','.ma-act-tag.add{background:#e9f9ef;color:#12a150;}','.ma-act-tag.del{background:#ffeef1;color:#e0355a;}','.ma-act-tag.dis{background:#fff5e6;color:#c47d00;}',
@@ -234,18 +226,7 @@
       var src = null; for (var i = 0; i < natives.length; i++) { if (natives[i].offsetParent !== null && natives[i].getBoundingClientRect().width > 0) { src = natives[i]; break; } }
       if (!src) src = natives[0];
       var clone = null; try { clone = src.cloneNode(true); } catch (e) { return false; } if (!clone) return false;
-      
-      // 尝试注入原网页搜索模块可能寻找的数据属性
-      try { 
-        for (var ai = 0; ai < src.attributes.length; ai++) { 
-          var attr = src.attributes[ai]; 
-          if (attr.name.indexOf('data-') === 0 && attr.name !== 'data-ma-clone') clone.setAttribute(attr.name, attr.value + '_audit'); 
-        } 
-        clone.setAttribute('data-type', 'app');
-        clone.setAttribute('data-name', '审核');
-        clone.setAttribute('data-title', '审核');
-      } catch (e) {}
-      
+      try { for (var ai = 0; ai < src.attributes.length; ai++) { var attr = src.attributes[ai]; if (attr.name.indexOf('data-') === 0 && attr.name !== 'data-ma-clone') clone.setAttribute(attr.name, attr.value + '_audit'); } clone.setAttribute('data-type', 'app'); clone.setAttribute('data-name', '审核'); clone.setAttribute('data-title', '审核'); } catch (e) {}
       if (clone.id) clone.removeAttribute('id');
       var ids = clone.querySelectorAll ? clone.querySelectorAll('[id]') : []; for (var k = 0; k < ids.length; k++) { try { ids[k].removeAttribute('id'); } catch (e2) {} }
       clone.removeAttribute('style'); var styled = clone.querySelectorAll ? clone.querySelectorAll('[style]') : []; for (var si = 0; si < styled.length; si++) { try { styled[si].removeAttribute('style'); } catch (e3) {} }
@@ -253,7 +234,6 @@
       var nameEl = null; try { nameEl = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]'); } catch (e8) {}
       if (nameEl && !/^(IMG|SVG|CANVAS)$/i.test(nameEl.tagName || '')) nameEl.textContent = '审核';
       else { var span = document.createElement('div'); span.className = 'ma-clone-name'; span.textContent = '审核'; span.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; try { clone.appendChild(span); } catch (e9) {} }
-      
       var dot = document.createElement('i'); dot.className = 'ma-app-dot'; try { clone.appendChild(dot); } catch (e10) {}
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       try { APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]'); } catch (e11) { APP_ICON_IMG_EL = null; }
@@ -360,16 +340,30 @@
     pending.sort(function (a, b) { return (b.time || 0) - (a.time || 0); });
     
     var h = '';
-    // 批量审核按钮
-    h += '<div class="ma-row" style="justify-content:flex-end; margin-bottom:12px;">';
-    h += '<button class="ma-btn sm" id="ma-pending-reject-all" style="color:#e0355a; border-color:#ffb3c0;">全部拒绝</button>';
+    h += '<div class="ma-bulkbar" style="margin-bottom:10px;">';
+    h += '<label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="ma-pending-all"> 全选</label>';
+    h += '<span id="ma-pending-count" style="color:#888;">已选 0 个</span>';
+    h += '<button class="ma-btn sm" id="ma-pending-reject-checked" style="color:#e0355a; border-color:#ffb3c0;">勾选拒绝</button>';
+    h += '<button class="ma-btn sm primary" id="ma-pending-approve-checked">勾选同意</button>';
+    h += '<div style="flex:1;"></div>';
+    h += '<button class="ma-btn sm" id="ma-pending-reject-all" style="color:#e0355a;">全部拒绝</button>';
     h += '<button class="ma-btn sm primary" id="ma-pending-approve-all">全部同意</button>';
     h += '</div>';
 
     var actM = { add: '新增', delete: '删除', disable: '禁用', enable: '启用', move: '迁移' }, clsM = { add: 'add', delete: 'del', disable: 'dis', enable: 'en', move: 'mv' };
     for (var i = 0; i < pending.length; i++) {
       var p = pending[i];
-      h += '<div class="ma-pending-item" data-pid="' + esc(p.id) + '"><div class="ma-pending-top"><span class="ma-act-tag ' + (clsM[p.action] || '') + '">' + (actM[p.action] || p.action) + '</span><span class="ma-sender">来自 <b>' + esc(p.sender) + '</b> · ' + esc(fmtRelative(p.time)) + '</span></div><div class="ma-pending-text">' + esc(p.text) + '</div>';
+      h += '<div class="ma-pending-item" data-pid="' + esc(p.id) + '">';
+      
+      h += '<div class="ma-pending-top">';
+      h += '<div style="display:flex;align-items:center;gap:8px;">';
+      h += '<input type="checkbox" class="ma-pending-check" data-pid="' + esc(p.id) + '">';
+      h += '<span class="ma-act-tag ' + (clsM[p.action] || '') + '">' + (actM[p.action] || p.action) + '</span>';
+      h += '</div>';
+      h += '<span class="ma-sender">来自 <b>' + esc(p.sender) + '</b> · ' + esc(fmtRelative(p.time)) + '</span>';
+      h += '</div>';
+      
+      h += '<div class="ma-pending-text">' + esc(p.text) + '</div>';
       if (p.note) h += '<div class="ma-pending-note">' + esc(p.note) + '</div>';
       if (p.action === 'add') {
         h += '<div class="ma-row" style="margin:4px 0 6px;"><span class="ma-label">存入分类：</span><select class="ma-select" data-sel-group style="flex:1;">';
@@ -385,7 +379,80 @@
   
   function bindPendingEvents(body) {
     safe(function () {
-      // 绑定批量操作
+      var checkboxes = body.querySelectorAll('.ma-pending-check');
+      var countEl = body.querySelector('#ma-pending-count');
+      var allCb = body.querySelector('#ma-pending-all');
+
+      function updatePendingCount() {
+        var n = 0, total = checkboxes.length;
+        for (var i = 0; i < total; i++) {
+          if (checkboxes[i].checked) n++;
+        }
+        if (countEl) countEl.textContent = '已选 ' + n + ' 个';
+        if (allCb) allCb.checked = (n > 0 && n === total);
+      }
+
+      if (allCb) {
+        allCb.addEventListener('change', function () {
+          for (var i = 0; i < checkboxes.length; i++) {
+            checkboxes[i].checked = allCb.checked;
+          }
+          updatePendingCount();
+        });
+      }
+      for (var i = 0; i < checkboxes.length; i++) {
+        checkboxes[i].addEventListener('change', updatePendingCount);
+      }
+
+      // 勾选审批操作
+      var btnAppChecked = body.querySelector('#ma-pending-approve-checked');
+      var btnRejChecked = body.querySelector('#ma-pending-reject-checked');
+      
+      if (btnAppChecked) {
+        btnAppChecked.addEventListener('click', function () {
+          safe(function () {
+            var cbs = body.querySelectorAll('.ma-pending-check:checked');
+            if (!cbs.length) { toast('请先勾选'); return; }
+            var cnt = 0;
+            for (var i = 0; i < cbs.length; i++) {
+              var pid = cbs[i].getAttribute('data-pid');
+              var p = null;
+              for (var k = 0; k < DB.pending.length; k++) if (DB.pending[k].id === pid) { p = DB.pending[k]; break; }
+              if (!p) continue;
+              var itemNode = cbs[i].closest('.ma-pending-item');
+              var sel = itemNode ? itemNode.querySelector('[data-sel-group]') : null;
+              var targetGid = sel ? sel.value : (DB.groups.length > 0 ? DB.groups[0].id : '');
+              if (approvePending(p, targetGid)) {
+                DB.pending = DB.pending.filter(function (x) { return x.id !== pid; });
+                cnt++;
+              }
+            }
+            saveData(); renderPanelBody(); updateBadge(); toast('已同意 ' + cnt + ' 条');
+          }, 'bulkApproveChecked');
+        });
+      }
+
+      if (btnRejChecked) {
+        btnRejChecked.addEventListener('click', function () {
+          safe(function () {
+            var cbs = body.querySelectorAll('.ma-pending-check:checked');
+            if (!cbs.length) { toast('请先勾选'); return; }
+            var cnt = 0;
+            for (var i = 0; i < cbs.length; i++) {
+              var pid = cbs[i].getAttribute('data-pid');
+              var p = null;
+              for (var k = 0; k < DB.pending.length; k++) if (DB.pending[k].id === pid) { p = DB.pending[k]; break; }
+              if (!p) continue;
+              rejectPending(p);
+              DB.pending = DB.pending.filter(function (x) { return x.id !== pid; });
+              cnt++;
+            }
+            saveData(); renderPanelBody(); updateBadge(); toast('已拒绝 ' + cnt + ' 条');
+          }, 'bulkRejectChecked');
+        });
+      }
+
+      // 绑定批量全部操作
       var btnAppAll = body.querySelector('#ma-pending-approve-all');
       var btnRejAll = body.querySelector('#ma-pending-reject-all');
       
@@ -393,12 +460,10 @@
         btnAppAll.addEventListener('click', function () {
           safe(function () {
             var cnt = 0;
-            // 使用 slice() 避免遍历时修改原数组导致错乱
             var list = DB.pending.slice();
             for (var i = 0; i < list.length; i++) {
                 var p = list[i];
                 if (p.status !== 'pending') continue;
-                // 批量时默认存入第一个分组（或者手动指定）
                 var targetGid = DB.groups.length > 0 ? DB.groups[0].id : '';
                 if (approvePending(p, targetGid)) cnt++;
                 DB.pending = DB.pending.filter(function (x) { return x.id !== p.id; });
@@ -472,7 +537,9 @@
 
     h += '<div class="ma-bulkbar"><label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="ma-sel-all"> 全选</label><span id="ma-sel-count" style="color:#888;">已选 0 个</span><button class="ma-btn sm danger" id="ma-bulk-del">批量删除</button><select class="ma-select" id="ma-bulk-target" style="width:auto;flex:1;min-width:80px;"><option value="">转移目标…</option>';
     for (var gi = 0; gi < DB.groups.length; gi++) h += '<option value="' + esc(DB.groups[gi].id) + '">' + esc(DB.groups[gi].name) + '</option>';
-    h += '</select><button class="ma-btn sm" id="ma-bulk-move">转移</button></div>';
+    h += '</select><button class="ma-btn sm" id="ma-bulk-move">转移</button>';
+    h += '<button class="ma-btn sm" id="ma-btn-dedup" style="color:#12a150;border-color:#a5e8c3;">一键去重</button>';
+    h += '</div>';
 
     h += '<div class="ma-row"><input type="text" class="ma-input" id="ma-new-group-name" placeholder="新分类名称…" maxlength="20" style="flex:1;"><button class="ma-btn primary" id="ma-new-group">+ 新建分类</button></div>';
     
@@ -513,10 +580,8 @@
         subBtn.addEventListener('click', function () {
           safe(function () {
             var txt = String(manInput.value || '').trim(); if (!txt) { toast('请输入内容'); return; }
-            // 支持换行批量提交
             var lines = txt.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
             if (!lines.length) { toast('请输入有效内容'); return; }
-            
             var gid = manGroup ? manGroup.value : '';
             for (var i = 0; i < lines.length; i++) {
                 DB.pending.push({ id: uid('p'), action: 'add', text: lines[i], cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: gid, toGroupName: '', sender: SENDER_ME, auto: false, time: Date.now(), status: 'pending', note: '我手动提交的申请' });
@@ -528,6 +593,47 @@
 
       var newBtn = body.querySelector('#ma-new-group'), newInput = body.querySelector('#ma-new-group-name');
       if (newBtn && newInput) { newBtn.addEventListener('click', function () { safe(function () { var n = String(newInput.value || '').trim(); if (!n) { toast('请输入名称'); return; } DB.groups.push({ id: uid('g'), name: n, disabledBy: [], cards: [] }); if (OPEN_GROUPS) OPEN_GROUPS[DB.groups[DB.groups.length - 1].id] = true; saveData(); renderPanelBody(); toast('已创建'); }, 'newGroup'); }); newInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') newBtn.click(); }); }
+      
+      // 绑定一键去重
+      var dedupBtn = body.querySelector('#ma-btn-dedup');
+      if (dedupBtn) {
+        dedupBtn.addEventListener('click', function () {
+          safe(function () {
+            var seen = {};
+            var count = 0;
+            for (var i = 0; i < DB.groups.length; i++) {
+              var g = DB.groups[i];
+              var newCards = [];
+              for (var j = 0; j < g.cards.length; j++) {
+                var c = g.cards[j];
+                var text = c.text.trim();
+                if (seen[text]) {
+                  count++;
+                  // 如果被删的卡有禁用标记，合并给保留的卡
+                  var keepCard = seen[text];
+                  if (c.disabledBy && c.disabledBy.length > 0) {
+                    for (var k = 0; k < c.disabledBy.length; k++) {
+                      if (keepCard.disabledBy.indexOf(c.disabledBy[k]) < 0) {
+                        keepCard.disabledBy.push(c.disabledBy[k]);
+                      }
+                    }
+                  }
+                } else {
+                  seen[text] = c;
+                  newCards.push(c);
+                }
+              }
+              g.cards = newCards;
+            }
+            if (count > 0) {
+              saveData(); renderPanelBody(); toast('已清理 ' + count + ' 张重复字卡');
+            } else {
+              toast('没有发现重复字卡');
+            }
+          }, 'dedup');
+        });
+      }
+
       eachNode(body, '[data-gact]', function (btn) { btn.addEventListener('click', function (e) { e.stopPropagation(); safe(function () { handleGroupAction(btn.getAttribute('data-gact'), btn.getAttribute('data-gid')); }, 'groupAct'); }); });
       eachNode(body, '.ma-group-head', function (head) { head.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-gact]')) return; var grp = head.parentNode, gid = grp.getAttribute('data-gid'); var isOpen = grp.classList.toggle('open'); if (OPEN_GROUPS) OPEN_GROUPS[gid] = isOpen; }); });
       eachNode(body, '[data-cact]', function (btn) { btn.addEventListener('click', function (e) { e.stopPropagation(); safe(function () { handleCardAction(btn.getAttribute('data-cact'), btn.getAttribute('data-cid')); }, 'cardAct'); }); });
