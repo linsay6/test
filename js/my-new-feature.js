@@ -1,6 +1,6 @@
 /* =========================================================================
  * my-new-feature.js
- * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（精准控制位置版）
+ * 赛博伴侣（梦角）字卡审核与管理系统 —— 独立挂载版（外观隔离版）
  * ========================================================================= */
 (function () {
   'use strict';
@@ -18,14 +18,18 @@
   var FETCH_PROBABILITY = 0.9;
   var DEFAULT_CATEGORY = '未分类';
 
+  // 数据隔离：ball* 仅控制悬浮球，appIcon* 仅控制原生图标
   var DEFAULT_SETTINGS = {
-    color: '#6c8cff',
-    size: 56,
-    image: '',
+    ballColor: '#6c8cff',
+    ballSize: 56,
+    ballImage: '',
     position: null,
     isHidden: false,
-    iconPage: 0,   // 所在页索引，0 表示第一页
-    iconIndex: 0   // 插入位置索引，0 表示第一个
+    
+    appIconImage: '',
+    
+    iconPage: 0,
+    iconIndex: 0
   };
 
   // 救命后门
@@ -127,14 +131,22 @@
 
     if (parsed.settings && typeof parsed.settings === 'object') {
       var s = parsed.settings;
+      
+      // 兼容老版本字段，并迁移到新字段
+      var ballColor = s.ballColor !== undefined ? s.ballColor : (s.color || DEFAULT_SETTINGS.ballColor);
+      var ballSize = s.ballSize !== undefined ? s.ballSize : (s.size || DEFAULT_SETTINGS.ballSize);
+      var ballImage = s.ballImage !== undefined ? s.ballImage : (s.image || '');
+      
       d.settings = {
-        color: typeof s.color === 'string' ? s.color : DEFAULT_SETTINGS.color,
-        size: typeof s.size === 'number' ? clamp(s.size, 36, 120) : DEFAULT_SETTINGS.size,
-        image: typeof s.image === 'string' ? s.image : '',
+        ballColor: typeof ballColor === 'string' ? ballColor : DEFAULT_SETTINGS.ballColor,
+        ballSize: typeof ballSize === 'number' ? clamp(ballSize, 36, 96) : DEFAULT_SETTINGS.ballSize,
+        ballImage: typeof ballImage === 'string' ? ballImage : '',
         position: (s.position && typeof s.position.x === 'number' && typeof s.position.y === 'number')
-          ? { x: s.position.x, y: s.position.y }
-          : null,
+          ? { x: s.position.x, y: s.position.y } : null,
         isHidden: !!s.isHidden,
+        
+        appIconImage: typeof s.appIconImage === 'string' ? s.appIconImage : '',
+        
         iconPage: typeof s.iconPage === 'number' ? s.iconPage : DEFAULT_SETTINGS.iconPage,
         iconIndex: typeof s.iconIndex === 'number' ? s.iconIndex : DEFAULT_SETTINGS.iconIndex
       };
@@ -190,6 +202,7 @@
     'font-weight:700;display:none;align-items:center;justify-content:center;box-sizing:border-box;',
     'pointer-events:none;box-shadow:none!important;font-family:-apple-system,sans-serif;z-index:10;}',
 
+    /* 确保原生注入的元素沿用原网页的弹性布局，绝不强加尺寸 */
     '.mac-injected-app .app-ico {',
     '  position: relative !important;',
     '  display: flex !important;',
@@ -200,8 +213,7 @@
     '  background-repeat: no-repeat !important;',
     '  box-shadow: none !important;',
     '  border: none !important;',
-    '  overflow: visible !important;',
-    '  border-radius: 20px !important;',
+    '  overflow: hidden !important;',
     '}',
     '.mac-injected-app .mac-native-text {',
     '  font-weight: bold;',
@@ -546,7 +558,7 @@
       var dy = e.clientY - startY;
       if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) moved = true;
       if (!moved) return;
-      var size = Store.data.settings.size;
+      var size = Store.data.settings.ballSize;
       var nl = clamp(startLeft + dx, 0, Math.max(0, window.innerWidth - size));
       var nt = clamp(startTop + dy, 0, Math.max(0, window.innerHeight - size));
       ball.style.left = nl + 'px';
@@ -576,7 +588,7 @@
   function positionBall() {
     if (!ball) return;
     var s = Store.data.settings;
-    var size = s.size;
+    var size = s.ballSize;
     if (s.position && typeof s.position.x === 'number' && typeof s.position.y === 'number') {
       var x = clamp(s.position.x, 0, Math.max(0, window.innerWidth - size));
       var y = clamp(s.position.y, 0, Math.max(0, window.innerHeight - size));
@@ -600,32 +612,26 @@
     if (!ico || !text) return;
     
     var s = Store.data.settings;
-    ico.style.width = s.size + 'px';
-    ico.style.height = s.size + 'px';
     
-    if (s.image) {
-      ico.style.backgroundImage = 'url("' + s.image + '")';
-      ico.style.backgroundSize = 'cover';
-      ico.style.backgroundPosition = 'center';
+    // 彻底移除所有尺寸控制，让原生网页的 .app-ico 决定大小
+    if (s.appIconImage) {
+      ico.style.backgroundImage = 'url("' + s.appIconImage + '")';
       ico.style.backgroundColor = 'transparent';
       text.style.opacity = '0';
     } else {
       ico.style.backgroundImage = 'none';
-      ico.style.backgroundColor = s.color;
+      ico.style.backgroundColor = '#f2f4f8'; // 默认底色让黑字看得清
       text.style.opacity = '1';
-      text.style.color = '#ffffff';
+      text.style.color = '#1f2430';
     }
-    text.style.fontSize = Math.round(s.size * 0.45) + 'px';
   }
 
-  // 核心：动态位置注入逻辑（配合定时器守护）
   function tryInjectNativeIcon() {
     try {
       var grids = document.querySelectorAll('.app-grid.p3-grid');
       if (!grids.length) return;
 
       var s = Store.data.settings;
-      // 边界保护
       var pageIdx = Math.min(Math.max(s.iconPage || 0, 0), grids.length - 1);
       var targetGrid = grids[pageIdx];
       
@@ -649,7 +655,6 @@
         });
       }
 
-      // 计算插入位置（排除自身，防止死循环）
       var targetIdx = s.iconIndex || 0;
       var children = Array.prototype.slice.call(targetGrid.children).filter(function(el) {
         return el !== appNode;
@@ -657,7 +662,6 @@
       
       var refNode = children[targetIdx] || null;
 
-      // 只有在位置不对时才进行 DOM 操作，尽量不引起原网页重渲染
       if (appNode.parentNode !== targetGrid || appNode.nextElementSibling !== refNode) {
         targetGrid.insertBefore(appNode, refNode);
       }
@@ -684,16 +688,17 @@
   function applyEntryUI() {
     var s = Store.data.settings;
     
+    // 悬浮球 UI 控制
     if (ball) {
       var shouldShowBall = !s.isHidden || isForceShow;
       ball.style.display = shouldShowBall ? 'flex' : 'none';
-      ball.style.width = s.size + 'px';
-      ball.style.height = s.size + 'px';
-      ball.style.backgroundColor = s.image ? 'transparent' : s.color;
-      ball.style.backgroundImage = s.image ? 'url("' + s.image + '")' : 'none';
+      ball.style.width = s.ballSize + 'px';
+      ball.style.height = s.ballSize + 'px';
+      ball.style.backgroundColor = s.ballImage ? 'transparent' : s.ballColor;
+      ball.style.backgroundImage = s.ballImage ? 'url("' + s.ballImage + '")' : 'none';
       ball.innerHTML =
-        '<span class="mac-ball-text" style="opacity:' + (s.image ? 0 : 1) +
-          ';font-size:' + Math.round(s.size * 0.38) + 'px">审</span>' +
+        '<span class="mac-ball-text" style="opacity:' + (s.ballImage ? 0 : 1) +
+          ';font-size:' + Math.round(s.ballSize * 0.38) + 'px">审</span>' +
         '<span class="mac-badge" data-role="ball-badge"></span>';
       positionBall();
     }
@@ -848,20 +853,30 @@
 
           '<div class="mac-pane" data-pane="settings">' +
             '<div class="mac-section">' +
-              '<div class="mac-section-title">图标外观</div>' +
-              '<div class="mac-field"><span>背景颜色</span><input type="color" data-role="set-color"></div>' +
+              '<div class="mac-section-title">悬浮球外观</div>' +
+              '<div class="mac-field"><span>背景颜色</span><input type="color" data-role="set-ball-color"></div>' +
               '<div class="mac-field"><span>图标大小</span>' +
-                '<input type="range" min="36" max="96" step="2" data-role="set-size">' +
-                '<span data-role="size-val">56</span></div>' +
+                '<input type="range" min="36" max="96" step="2" data-role="set-ball-size">' +
+                '<span data-role="ball-size-val">56</span></div>' +
               '<div class="mac-row">' +
-                '<button class="mac-btn" data-act="upload-img">上传自定义图片</button>' +
-                '<button class="mac-btn" data-act="clear-img">清除图片</button>' +
+                '<button class="mac-btn" data-act="upload-ball-img">上传悬浮球图片</button>' +
+                '<button class="mac-btn" data-act="clear-ball-img">清除图片</button>' +
               '</div>' +
-              '<input type="file" accept="image/*" data-role="img-file" style="display:none">' +
+              '<input type="file" accept="image/*" data-role="ball-img-file" style="display:none">' +
             '</div>' +
 
             '<div class="mac-section">' +
-              '<div class="mac-section-title">九宫格图标位置控制</div>' +
+              '<div class="mac-section-title">九宫格图标外观</div>' +
+              '<div style="font-size:12px;color:#9aa1b2;margin-bottom:10px;">图标尺寸自动继承原网页排版，无需调整。</div>' +
+              '<div class="mac-row">' +
+                '<button class="mac-btn" data-act="upload-app-img">上传图标图片</button>' +
+                '<button class="mac-btn" data-act="clear-app-img">清除图片</button>' +
+              '</div>' +
+              '<input type="file" accept="image/*" data-role="app-img-file" style="display:none">' +
+            '</div>' +
+
+            '<div class="mac-section">' +
+              '<div class="mac-section-title">九宫格位置控制</div>' +
               '<div class="mac-field">' +
                 '<span>所在页</span>' +
                 '<select class="mac-select mac-select-sm" data-role="set-icon-page">' +
@@ -874,9 +889,6 @@
               '<div class="mac-field">' +
                 '<span>第几个</span>' +
                 '<select class="mac-select mac-select-sm" data-role="set-icon-index"></select>' +
-              '</div>' +
-              '<div style="font-size:12px;color:#9aa1b2;line-height:1.5;">' +
-                '提示：原网页的装修模式无法拖拽此图标，请在此处修改，插件会自动强制将其插入到指定网格的对应位置。' +
               '</div>' +
             '</div>' +
 
@@ -1049,21 +1061,20 @@
   function renderSettings() {
     if (!panelRoot) return;
     var s = Store.data.settings;
-    var color = panelRoot.querySelector('[data-role="set-color"]');
-    var size = panelRoot.querySelector('[data-role="set-size"]');
-    var sizeVal = panelRoot.querySelector('[data-role="size-val"]');
+    var ballColor = panelRoot.querySelector('[data-role="set-ball-color"]');
+    var ballSize = panelRoot.querySelector('[data-role="set-ball-size"]');
+    var ballSizeVal = panelRoot.querySelector('[data-role="ball-size-val"]');
     var hidden = panelRoot.querySelector('[data-role="set-hidden"]');
     var iconPage = panelRoot.querySelector('[data-role="set-icon-page"]');
     var iconIndex = panelRoot.querySelector('[data-role="set-icon-index"]');
     
-    if (color) color.value = normalizeHex(s.color);
-    if (size) size.value = s.size;
-    if (sizeVal) sizeVal.textContent = s.size;
+    if (ballColor) ballColor.value = normalizeHex(s.ballColor);
+    if (ballSize) ballSize.value = s.ballSize;
+    if (ballSizeVal) ballSizeVal.textContent = s.ballSize;
     if (hidden) hidden.checked = !!s.isHidden;
     if (iconPage) iconPage.value = s.iconPage;
     
     if (iconIndex) {
-      // 动态生成第 1 到 15 个位置的选项
       var opts = '';
       for (var i = 1; i <= 15; i++) {
         opts += '<option value="' + (i - 1) + '">第 ' + i + ' 个</option>';
@@ -1160,13 +1171,18 @@
         t.value = '';
         return;
       }
-      if (t.matches('[data-role="img-file"]')) {
-        if (t.files && t.files[0]) handleImageFile(t.files[0]);
+      if (t.matches('[data-role="ball-img-file"]')) {
+        if (t.files && t.files[0]) handleImageFile(t.files[0], 'ball');
         t.value = '';
         return;
       }
-      if (t.matches('[data-role="set-color"]')) {
-        Store.data.settings.color = t.value;
+      if (t.matches('[data-role="app-img-file"]')) {
+        if (t.files && t.files[0]) handleImageFile(t.files[0], 'app');
+        t.value = '';
+        return;
+      }
+      if (t.matches('[data-role="set-ball-color"]')) {
+        Store.data.settings.ballColor = t.value;
         Store.save();
         applyEntryUI();
         return;
@@ -1175,16 +1191,16 @@
 
     root.addEventListener('input', function (e) {
       var t = e.target;
-      if (t.matches('[data-role="set-size"]')) {
-        Store.data.settings.size = parseInt(t.value, 10) || 56;
-        var v = root.querySelector('[data-role="size-val"]');
-        if (v) v.textContent = Store.data.settings.size;
+      if (t.matches('[data-role="set-ball-size"]')) {
+        Store.data.settings.ballSize = parseInt(t.value, 10) || 56;
+        var v = root.querySelector('[data-role="ball-size-val"]');
+        if (v) v.textContent = Store.data.settings.ballSize;
         Store.save();
         applyEntryUI();
         return;
       }
-      if (t.matches('[data-role="set-color"]')) {
-        Store.data.settings.color = t.value;
+      if (t.matches('[data-role="set-ball-color"]')) {
+        Store.data.settings.ballColor = t.value;
         Store.save();
         applyEntryUI();
         return;
@@ -1516,18 +1532,33 @@
         break;
       }
 
-      case 'upload-img': {
-        var fileInput = panelRoot.querySelector('[data-role="img-file"]');
+      case 'upload-ball-img': {
+        var fileInput = panelRoot.querySelector('[data-role="ball-img-file"]');
         if (fileInput) fileInput.click();
         break;
       }
 
-      case 'clear-img': {
-        if (!d.settings.image) { toast('当前没有自定义图片'); return; }
-        d.settings.image = '';
+      case 'clear-ball-img': {
+        if (!d.settings.ballImage) { toast('当前没有悬浮球图片'); return; }
+        d.settings.ballImage = '';
         Store.save();
         applyEntryUI();
-        toast('已清除自定义图片');
+        toast('悬浮球图片已清除');
+        break;
+      }
+
+      case 'upload-app-img': {
+        var fileInput = panelRoot.querySelector('[data-role="app-img-file"]');
+        if (fileInput) fileInput.click();
+        break;
+      }
+
+      case 'clear-app-img': {
+        if (!d.settings.appIconImage) { toast('当前没有图标图片'); return; }
+        d.settings.appIconImage = '';
+        Store.save();
+        applyEntryUI();
+        toast('九宫格图标图片已清除');
         break;
       }
 
@@ -1549,16 +1580,20 @@
     }
   }
 
-  function handleImageFile(file) {
+  function handleImageFile(file, type) {
     if (!/^image\//.test(file.type)) { toast('请选择图片文件'); return; }
     if (file.size > 8 * 1024 * 1024) { toast('图片过大（请小于 8MB）'); return; }
     var reader = new FileReader();
     reader.onload = function () {
       openCropModal(String(reader.result), function (dataUrl) {
-        Store.data.settings.image = dataUrl;
+        if (type === 'ball') {
+          Store.data.settings.ballImage = dataUrl;
+        } else {
+          Store.data.settings.appIconImage = dataUrl;
+        }
         Store.save();
         applyEntryUI();
-        toast('图标图片已更新');
+        toast('图片已更新');
       });
     };
     reader.onerror = function () { toast('图片读取失败'); };
@@ -1650,8 +1685,8 @@
     positionBall();
     var s = Store.data.settings;
     if (s.position) {
-      var x = clamp(s.position.x, 0, Math.max(0, window.innerWidth - s.size));
-      var y = clamp(s.position.y, 0, Math.max(0, window.innerHeight - s.size));
+      var x = clamp(s.position.x, 0, Math.max(0, window.innerWidth - s.ballSize));
+      var y = clamp(s.position.y, 0, Math.max(0, window.innerHeight - s.ballSize));
       if (x !== s.position.x || y !== s.position.y) {
         s.position = { x: x, y: y };
         Store.save();
@@ -1681,7 +1716,6 @@
       try { autoFetch(); } catch (e) {}
     }, FETCH_INTERVAL);
 
-    // 守护进程：每 1.5 秒检查原网页是否有网格，以及我们注入的元素是否被原网页重置，保证位置与存活
     setInterval(function () {
       try { tryInjectNativeIcon(); } catch (e) {}
     }, 1500);
