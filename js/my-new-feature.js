@@ -1,9 +1,9 @@
 /* ============================================================================
  * my-new-feature.js
- * 纯前端单页应用外挂脚本 —— 审核 · 字卡库 · 梦角引擎
+ * 纯前端单页应用外挂脚本 —— 审核 · 字卡库 · 梦角引擎（无刷新完美版）
  * 所有数据统一保存在 localStorage['my-audit-cards']
  * 聊天记录只读自 localStorage['xy-home-v2:default:chat-msgs']
- * 全脚本 try...catch 容错，绝不导致原网页白屏
+ * 全脚本 try...catch 容错，绝不导致原网页白屏，绝对禁止刷新网页
  * ========================================================================== */
 (function () {
   'use strict';
@@ -12,7 +12,7 @@
   try {
     if (window.__MY_AUDIT_LOADED__) return;
     window.__MY_AUDIT_LOADED__ = true;
-  } catch (e) { /* ignore */ }
+  } catch (e) {}
 
   /* --------------------------- 常量区 --------------------------- */
   var LS_KEY_CHAT = 'xy-home-v2:default:chat-msgs';
@@ -21,31 +21,31 @@
 
   var ENGINE_INTERVAL = 30 * 60 * 1000;   // 引擎定时器：30 分钟
   var RECENT_MS       = 15 * 60 * 1000;   // 只抓最近 15 分钟
-  var MIN_LEN         = 5;                // 字数下限
-  var MAX_LEN         = 35;               // 字数上限
-  var MAX_AUTO_PENDING = 5;               // 自动抓取待审核积压上限
-  var MAX_GRAB_PER_TICK = 2;              // 单轮最多抓 2 条
-  var MISCHIEF_RATE   = 0.02;             // 捣乱申请概率 2%
-  var HISTORY_LIMIT   = 100;              // 历史档案最多 100 条
+  var MIN_LEN         = 5;
+  var MAX_LEN         = 35;
+  var MAX_AUTO_PENDING = 5;
+  var MAX_GRAB_PER_TICK = 2;
+  var MISCHIEF_RATE   = 0.02;
+  var HISTORY_LIMIT   = 100;
 
   var EMO_WORDS = ['喜欢', '爱', '想你', '开心'];
-
   var SENDER_MJ = '梦角';
   var SENDER_ME = '我';
-
   var Z_BASE = 2147483000;
 
   /* --------------------------- 全局状态 --------------------------- */
-  var DB = null;             // 数据对象
-  var ROOT = null;           // #ma-root
-  var FAB = null;            // 悬浮球 DOM
-  var MASK = null;           // 面板遮罩
-  var PANEL = null;          // 面板 DOM
+  var DB = null;
+  var ROOT = null;
+  var FAB = null;
+  var MASK = null;
+  var PANEL = null;
   var CURRENT_TAB = 'pending';
   var PANEL_OPEN = false;
   var URL_FORCE_SHOW = false;
   var APP_ICON_EL = null;
+  var APP_ICON_IMG_EL = null;
   var appIconInjectTimer = null;
+  var OPEN_GROUPS = null;
 
   /* ==========================================================================
    * 工具函数
@@ -60,9 +60,7 @@
   }
 
   function uid(prefix) {
-    return (prefix || 'id') + '_' +
-      Date.now().toString(36) + '_' +
-      Math.random().toString(36).slice(2, 8);
+    return (prefix || 'id') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
   }
 
   function esc(str) {
@@ -79,8 +77,7 @@
     try {
       var d = new Date(Number(ts) || Date.now());
       if (isNaN(d.getTime())) return '';
-      return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
-        ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+      return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
     } catch (e) { return ''; }
   }
 
@@ -100,10 +97,6 @@
     return Math.min(b, Math.max(a, n));
   }
 
-  function charLen(str) {
-    try { return String(str || '').trim().length; } catch (e) { return 0; }
-  }
-
   function isEmotional(text) {
     try {
       for (var i = 0; i < EMO_WORDS.length; i++) {
@@ -113,39 +106,37 @@
     return false;
   }
 
+  function arrFindIndex(arr, fn) {
+    try {
+      for (var i = 0; i < arr.length; i++) { if (fn(arr[i], i)) return i; }
+    } catch (e) {}
+    return -1;
+  }
+
+  function eachNode(container, sel, fn) {
+    try {
+      var nodes = container.querySelectorAll(sel);
+      for (var i = 0; i < nodes.length; i++) fn(nodes[i], i);
+    } catch (e) {}
+  }
+
   /* ==========================================================================
-   * 数据层：localStorage['my-audit-cards']
+   * 数据层
    * ========================================================================== */
   function defaultSettings() {
-    return {
-      ballColor: '#ff6b81',
-      ballSize: 52,
-      ballImage: '',       // base64 裁剪后的悬浮球图片
-      appImage: '',        // base64 裁剪后的原生图标图片
-      hideAll: false,      // 隐藏所有入口
-      ballPos: null        // { x, y } 用户拖拽后的位置
-    };
+    return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', hideAll: false, ballPos: null };
   }
 
   function defaultData() {
     return {
-      version: DATA_VERSION,
-      groups: [],       // [{ id, name, disabledBy: [], cards: [{ id, text, disabledBy: [], createdAt }] }]
-      pending: [],      // 待审核队列
-      history: [],      // 历史档案
-      settings: defaultSettings(),
-      meta: {
-        lastGrabAt: 0,
-        grabbedKeys: [],
-        lastMischiefAt: 0
-      }
+      version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(),
+      meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0 }
     };
   }
 
   function normalizeData(d) {
     var def = defaultData();
     if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
-
     if (!Array.isArray(d.groups)) d.groups = [];
     for (var gi = 0; gi < d.groups.length; gi++) {
       var g = d.groups[gi];
@@ -163,7 +154,6 @@
         if (typeof c.createdAt !== 'number') c.createdAt = Date.now();
       }
     }
-
     if (!Array.isArray(d.pending)) d.pending = [];
     for (var pi = 0; pi < d.pending.length; pi++) {
       var p = d.pending[pi];
@@ -173,10 +163,8 @@
       if (typeof p.time !== 'number') p.time = Date.now();
       if (!p.sender) p.sender = SENDER_MJ;
     }
-
     if (!Array.isArray(d.history)) d.history = [];
     if (d.history.length > HISTORY_LIMIT) d.history = d.history.slice(-HISTORY_LIMIT);
-
     if (!d.settings || typeof d.settings !== 'object') d.settings = defaultSettings();
     var s = d.settings, ds = defaultSettings();
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor;
@@ -185,19 +173,12 @@
     if (typeof s.ballImage !== 'string') s.ballImage = '';
     if (typeof s.appImage !== 'string') s.appImage = '';
     if (typeof s.hideAll !== 'boolean') s.hideAll = false;
-    if (!s.ballPos || typeof s.ballPos !== 'object' ||
-        typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') {
-      s.ballPos = null;
-    }
-
+    if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
     if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta;
     if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0;
     if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0;
     if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = [];
-    if (d.meta.grabbedKeys.length > 400) {
-      d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400);
-    }
-
+    if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400);
     d.version = DATA_VERSION;
     return d;
   }
@@ -206,8 +187,7 @@
     return safe(function () {
       var raw = localStorage.getItem(LS_KEY_DATA);
       if (!raw) return defaultData();
-      var obj = JSON.parse(raw);
-      return normalizeData(obj);
+      return normalizeData(JSON.parse(raw));
     }, 'loadData', defaultData());
   }
 
@@ -218,7 +198,6 @@
     }, 'saveData', false);
   }
 
-  /* --------------------------- 聊天记录读写 --------------------------- */
   function readChatMsgs() {
     return safe(function () {
       var raw = localStorage.getItem(LS_KEY_CHAT);
@@ -235,247 +214,249 @@
     }, 'writeChatMsgs', false);
   }
 
-  /* --------------------------- 字卡查找辅助 --------------------------- */
   function groupNameById(gid) {
-    try {
-      for (var i = 0; i < DB.groups.length; i++) {
-        if (DB.groups[i].id === gid) return DB.groups[i].name;
-      }
-    } catch (e) {}
+    try { for (var i = 0; i < DB.groups.length; i++) if (DB.groups[i].id === gid) return DB.groups[i].name; } catch (e) {}
     return '';
   }
-
   function findGroup(gid) {
-    try {
-      for (var i = 0; i < DB.groups.length; i++) {
-        if (DB.groups[i].id === gid) return DB.groups[i];
-      }
-    } catch (e) {}
+    try { for (var i = 0; i < DB.groups.length; i++) if (DB.groups[i].id === gid) return DB.groups[i]; } catch (e) {}
     return null;
   }
-
   function findCard(cid) {
-    try {
-      for (var i = 0; i < DB.groups.length; i++) {
-        var g = DB.groups[i];
-        for (var j = 0; j < g.cards.length; j++) {
-          if (g.cards[j].id === cid) return { group: g, card: g.cards[j] };
-        }
-      }
-    } catch (e) {}
+    try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {}
     return null;
   }
 
-  function allCardsCount() {
-    var n = 0;
-    try {
-      for (var i = 0; i < DB.groups.length; i++) n += DB.groups[i].cards.length;
-    } catch (e) {}
-    return n;
-  }
-
-  /* --------------------------- 历史档案 --------------------------- */
   function pushHistory(rec) {
     safe(function () {
-      var item = {
-        id: uid('h'),
-        sender: rec.sender || SENDER_MJ,
-        action: rec.action || 'add',
-        text: rec.text || '',
-        result: rec.result || 'agree',   // agree / reject
-        time: Date.now(),
-        extra: rec.extra || ''
-      };
-      DB.history.push(item);
-      if (DB.history.length > HISTORY_LIMIT) {
-        DB.history = DB.history.slice(DB.history.length - HISTORY_LIMIT);
-      }
+      DB.history.push({
+        id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add',
+        text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || ''
+      });
+      if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT);
       saveData();
     }, 'pushHistory');
   }
 
   /* ==========================================================================
+   * 核心：无刷新注入气泡 (痛点 1 & 2 核心解法)
+   * 通过克隆原网页对方的气泡节点来实现完美融合。
+   * ========================================================================== */
+  function injectBubbleToChat(text) {
+    try {
+      // 1. 先同步底层数据
+      var msgs = readChatMsgs();
+      msgs.push({ side: 'in', text: text, time: Date.now() });
+      var saveOk = writeChatMsgs(msgs);
+
+      if (!saveOk) {
+        console.warn('[审计] 写入聊天记录失败');
+      }
+
+      // 2. 查找聊天容器
+      var chatBody = document.getElementById('chat-body');
+      if (!chatBody) {
+        console.warn('[审计] 找不到 #chat-body，静默失败');
+        return false;
+      }
+
+      // 3. 寻找最近的“对方”消息节点作为模板
+      var children = Array.from(chatBody.children);
+      var templateNode = null;
+
+      for (var i = children.length - 1; i >= 0; i--) {
+        var el = children[i];
+        var cls = (el.className || '').toLowerCase();
+        
+        // 排除明显的“我”的消息类名
+        if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) {
+          continue;
+        }
+        
+        // 确保节点含有文本内容
+        if (el.textContent && el.textContent.trim().length > 0) {
+          templateNode = el;
+          break;
+        }
+      }
+
+      if (!templateNode) {
+        console.warn('[审计] 找不到可克隆的对方气泡节点，静默失败');
+        return false;
+      }
+
+      // 4. 克隆节点并清理 ID
+      var clone = templateNode.cloneNode(true);
+      if (clone.id) clone.removeAttribute('id');
+      var nodesWithId = clone.querySelectorAll('[id]');
+      for (var k = 0; k < nodesWithId.length; k++) {
+        nodesWithId[k].removeAttribute('id');
+      }
+
+      // 5. 使用 TreeWalker 寻找最长文本节点进行安全替换 (保护原 DOM 结构如时间、头像)
+      var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false);
+      var maxLen = 0;
+      var targetTextNode = null;
+      var tn;
+      while ((tn = walker.nextNode())) {
+        var len = tn.nodeValue.trim().length;
+        if (len > maxLen) {
+          maxLen = len;
+          targetTextNode = tn;
+        }
+      }
+
+      if (targetTextNode) {
+        targetTextNode.nodeValue = text;
+      } else {
+        // 兜底：如果没有任何文本节点（极少见），直接改 innerText
+        clone.innerText = text;
+      }
+
+      // 6. 插入 DOM 并滚动到底部
+      chatBody.appendChild(clone);
+      
+      // 尝试滚动 (兼容多种滚动容器)
+      try {
+        chatBody.scrollTop = chatBody.scrollHeight;
+        if (chatBody.parentNode) chatBody.parentNode.scrollTop = chatBody.parentNode.scrollHeight;
+        window.scrollTo(0, document.body.scrollHeight);
+      } catch (e) {}
+
+      return true;
+    } catch (err) {
+      console.warn('[审计] 注入气泡异常：', err);
+      return false;
+    }
+  }
+
+  /* ==========================================================================
    * 模块一：拟人化梦角引擎
    * ========================================================================== */
-
-  /* 待审核里"自动抓取新增"的积压数量 */
   function autoPendingCount() {
     var n = 0;
-    try {
-      for (var i = 0; i < DB.pending.length; i++) {
-        var p = DB.pending[i];
-        if (p.status === 'pending' && p.sender === SENDER_MJ && p.action === 'add') n++;
-      }
-    } catch (e) {}
+    try { for (var i = 0; i < DB.pending.length; i++) { var p = DB.pending[i]; if (p.status === 'pending' && p.sender === SENDER_MJ && p.action === 'add') n++; } } catch (e) {}
     return n;
   }
-
-  /* 总待审核数量（用于红点） */
   function pendingCount() {
     var n = 0;
-    try {
-      for (var i = 0; i < DB.pending.length; i++) {
-        if (DB.pending[i].status === 'pending') n++;
-      }
-    } catch (e) {}
+    try { for (var i = 0; i < DB.pending.length; i++) if (DB.pending[i].status === 'pending') n++; } catch (e) {}
     return n;
   }
 
-  /* ---------- 抓取逻辑 ---------- */
   function grabFromChat() {
     safe(function () {
-      if (!DB) return;
-
-      // 上限控制：积压满 5 条暂停抓取
-      var autoN = autoPendingCount();
-      if (autoN >= MAX_AUTO_PENDING) return;
-
-      var msgs = readChatMsgs();
-      if (!msgs || !msgs.length) return;
-
-      var now = Date.now();
-      var cands = [];
-
+      if (!DB || autoPendingCount() >= MAX_AUTO_PENDING) return;
+      var msgs = readChatMsgs(), now = Date.now(), cands = [];
       for (var i = 0; i < msgs.length; i++) {
         var m = msgs[i];
-        if (!m || typeof m !== 'object') continue;
-        if (m.side !== 'out') continue;                       // 只抓用户发言
-        if (typeof m.text !== 'string') continue;
-
-        var t = m.text.trim();
-        var len = t.length;
-        if (len < MIN_LEN || len > MAX_LEN) continue;          // 字数 5~35
-
+        if (!m || typeof m !== 'object' || m.side !== 'out' || typeof m.text !== 'string') continue;
+        var t = m.text.trim(), len = t.length;
+        if (len < MIN_LEN || len > MAX_LEN) continue;
         var tm = Number(m.time) || 0;
-        if (!tm) continue;
-        if (now - tm > RECENT_MS) continue;                    // 只抓最近 15 分钟
-        if (now - tm < -60 * 1000) continue;                   // 未来时间容错
-
+        if (!tm || now - tm > RECENT_MS || now - tm < -60 * 1000) continue;
         var key = t + '@@' + tm;
-        if (DB.meta.grabbedKeys.indexOf(key) >= 0) continue;   // 已判定过，不重复
-
+        if (DB.meta.grabbedKeys.indexOf(key) >= 0) continue;
         cands.push({ text: t, time: tm, key: key });
       }
-
       if (!cands.length) return;
-
-      // 随机打散
       cands.sort(function () { return Math.random() - 0.5; });
-
       var added = 0;
       for (var j = 0; j < cands.length; j++) {
-        if (added >= MAX_GRAB_PER_TICK) break;
-        if (autoPendingCount() + added >= MAX_AUTO_PENDING) break;
-
-        var c = cands[j];
-        var emo = isEmotional(c.text);
-
-        // 概率控制：情感词 30%，普通 5%
+        if (added >= MAX_GRAB_PER_TICK || autoPendingCount() + added >= MAX_AUTO_PENDING) break;
+        var c = cands[j], emo = isEmotional(c.text);
         var pass = emo ? (Math.random() > 0.7) : (Math.random() > 0.95);
-
-        // 无论是否通过，都记录 key，避免同一条反复摇骰子
         DB.meta.grabbedKeys.push(c.key);
-
         if (!pass) continue;
-
         DB.pending.push({
-          id: uid('p'),
-          action: 'add',
-          text: c.text,
-          cardId: '',
-          fromGroupId: '',
-          fromGroupName: '',
-          toGroupId: '',
-          toGroupName: '',
-          sender: SENDER_MJ,          // 自动触发 → 梦角
-          auto: true,
-          emo: emo,
-          time: Date.now(),
-          status: 'pending',
-          note: emo ? '含情感词，触发概率提升至 30%' : '常规抓取，触发概率 5%'
+          id: uid('p'), action: 'add', text: c.text, cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: '', toGroupName: '',
+          sender: SENDER_MJ, auto: true, emo: emo, time: Date.now(), status: 'pending',
+          note: emo ? '含情感词，触发概率提升' : '常规抓取'
         });
         added++;
       }
-
-      if (DB.meta.grabbedKeys.length > 400) {
-        DB.meta.grabbedKeys = DB.meta.grabbedKeys.slice(-400);
-      }
+      if (DB.meta.grabbedKeys.length > 400) DB.meta.grabbedKeys = DB.meta.grabbedKeys.slice(-400);
       DB.meta.lastGrabAt = Date.now();
     }, 'grabFromChat');
   }
 
-  /* ---------- 捣乱 / 整理申请 ---------- */
   function maybeMischief() {
     safe(function () {
-      if (!DB) return;
-      if (Math.random() > MISCHIEF_RATE) return;   // 低概率
-
+      if (!DB || Math.random() > MISCHIEF_RATE) return;
       var pool = [];
       for (var i = 0; i < DB.groups.length; i++) {
         var g = DB.groups[i];
-        for (var j = 0; j < g.cards.length; j++) {
-          pool.push({ group: g, card: g.cards[j] });
-        }
+        for (var j = 0; j < g.cards.length; j++) pool.push({ group: g, card: g.cards[j] });
       }
       if (!pool.length) return;
-
-      var pick = pool[Math.floor(Math.random() * pool.length)];
-      var group = pick.group;
-      var card = pick.card;
-
-      var groupDisabled = (group.disabledBy || []).length > 0;
-      var cardDisabled = (card.disabledBy || []).length > 0;
+      var pick = pool[Math.floor(Math.random() * pool.length)], group = pick.group, card = pick.card;
+      var groupDisabled = (group.disabledBy || []).length > 0, cardDisabled = (card.disabledBy || []).length > 0;
       var isDisabled = groupDisabled || cardDisabled;
-
-      // 禁用状态下偏向"恢复启用"，启用状态下偏向"禁用/删除/迁移"
-      var actions = isDisabled
-        ? ['enable', 'delete', 'move']
-        : ['disable', 'delete', 'move'];
-
+      var actions = isDisabled ? ['enable', 'delete', 'move'] : ['disable', 'delete', 'move'];
       var action = actions[Math.floor(Math.random() * actions.length)];
-      var toGroupId = '';
-      var toGroupName = '';
-
+      var toGroupId = '', toGroupName = '';
       if (action === 'move') {
         var others = [];
-        for (var k = 0; k < DB.groups.length; k++) {
-          if (DB.groups[k].id !== group.id) others.push(DB.groups[k]);
-        }
-        if (!others.length) {
-          // 没有可迁移目标，退化为 禁用/恢复
-          action = isDisabled ? 'enable' : 'disable';
-        } else {
+        for (var k = 0; k < DB.groups.length; k++) if (DB.groups[k].id !== group.id) others.push(DB.groups[k]);
+        if (!others.length) action = isDisabled ? 'enable' : 'disable';
+        else {
           var tgt = others[Math.floor(Math.random() * others.length)];
-          toGroupId = tgt.id;
-          toGroupName = tgt.name;
+          toGroupId = tgt.id; toGroupName = tgt.name;
         }
       }
-
       DB.pending.push({
-        id: uid('p'),
-        action: action,
-        text: card.text,
-        cardId: card.id,
-        fromGroupId: group.id,
-        fromGroupName: group.name,
-        toGroupId: toGroupId,
-        toGroupName: toGroupName,
-        sender: SENDER_MJ,
-        auto: true,
-        time: Date.now(),
-        status: 'pending',
-        note: '梦角的随机整理申请'
+        id: uid('p'), action: action, text: card.text, cardId: card.id, fromGroupId: group.id, fromGroupName: group.name,
+        toGroupId: toGroupId, toGroupName: toGroupName, sender: SENDER_MJ, auto: true, time: Date.now(), status: 'pending', note: '随机整理申请'
       });
-
       DB.meta.lastMischiefAt = Date.now();
     }, 'maybeMischief');
   }
 
-  /* ---------- 引擎主循环 ---------- */
+  // 痛点 2：梦角全自动发送
+  function autoSendCard() {
+    safe(function () {
+      if (!DB || !DB.groups) return;
+      
+      var validCards = [];
+      try {
+        for (var i = 0; i < DB.groups.length; i++) {
+          var g = DB.groups[i];
+          // 分组被禁用则跳过
+          if (g.disabledBy && g.disabledBy.length > 0) continue;
+          
+          for (var j = 0; j < g.cards.length; j++) {
+            var c = g.cards[j];
+            // 字卡被禁用则跳过
+            if (c.disabledBy && c.disabledBy.length > 0) continue;
+            if (c.text && c.text.trim()) {
+              validCards.push(c.text.trim());
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[审计] 读取字卡库出错：', e);
+        return;
+      }
+
+      if (validCards.length === 0) return;
+
+      // 随机抽取一张
+      var randomText = validCards[Math.floor(Math.random() * validCards.length)];
+      
+      // 调用无刷新上屏
+      var ok = injectBubbleToChat(randomText);
+      if (ok) {
+        console.log('[审计] 梦角自动发送成功：', randomText);
+      }
+    }, 'autoSendCard');
+  }
+
   function tickEngine() {
     safe(function () {
       grabFromChat();
       maybeMischief();
+      autoSendCard(); // 独立执行主动发消息
+      
       saveData();
       updateBadge();
       if (PANEL_OPEN && CURRENT_TAB === 'pending') renderPanelBody();
@@ -484,24 +465,20 @@
 
   function startEngine() {
     safe(function () {
-      // 启动时先跑一次（若距上次超过 30 分钟才抓，避免刷新狂抓）
       var now = Date.now();
       if (!DB.meta.lastGrabAt || (now - DB.meta.lastGrabAt) > ENGINE_INTERVAL) {
         tickEngine();
       } else {
-        // 只尝试捣乱，不重复抓取
         maybeMischief();
         saveData();
         updateBadge();
       }
-      setInterval(function () {
-        safe(tickEngine, 'tickEngine:interval');
-      }, ENGINE_INTERVAL);
+      setInterval(function () { safe(tickEngine, 'tickEngine:interval'); }, ENGINE_INTERVAL);
     }, 'startEngine');
   }
 
   /* ==========================================================================
-   * CSS 注入
+   * CSS 样式注入
    * ========================================================================== */
   function injectCSS() {
     safe(function () {
@@ -509,118 +486,47 @@
       var css = [
         '#ma-root{position:static;margin:0;padding:0;}',
         '#ma-root,#ma-root *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}',
-
-        /* ---------- 悬浮球 ---------- */
-        '#ma-fab{',
-        '  position:fixed;z-index:' + (Z_BASE + 10) + ';',
-        '  display:flex;align-items:center;justify-content:center;',
-        '  border-radius:50%;',
-        '  color:#fff;font-size:13px;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;',
-        '  cursor:pointer;user-select:none;',
-        '  background-color:#ff6b81;background-size:cover;background-position:center;background-repeat:no-repeat;',
-        '  box-shadow:none;border:none;outline:none;',
-        '  transition:transform .15s ease,opacity .2s ease;',
-        '  touch-action:none;overflow:visible;',
-        '}',
+        '#ma-fab{position:fixed;z-index:' + (Z_BASE + 10) + ';display:flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-size:13px;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;cursor:pointer;user-select:none;background-color:#ff6b81;background-size:cover;background-position:center;background-repeat:no-repeat;box-shadow:none;border:none;outline:none;transition:transform .15s ease,opacity .2s ease;touch-action:none;overflow:visible;}',
         '#ma-fab:active{transform:scale(.94);}',
         '#ma-fab.ma-hidden{display:none!important;}',
-        '#ma-fab .ma-fab-dot{',
-        '  position:absolute;top:-1px;right:-1px;width:11px;height:11px;border-radius:50%;',
-        '  background:#ff2d55;display:none;pointer-events:none;',
-        '}',
+        '#ma-fab .ma-fab-dot{position:absolute;top:-1px;right:-1px;width:11px;height:11px;border-radius:50%;background:#ff2d55;display:none;pointer-events:none;}',
         '#ma-fab .ma-fab-dot.on{display:block;}',
         '#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
-
-        /* ---------- 克隆 App 图标 ---------- */
         '#ma-app-icon{position:relative;cursor:pointer;}',
         '#ma-app-icon.ma-hidden{display:none!important;}',
-        '#ma-app-icon .ma-app-dot{',
-        '  position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;',
-        '  background:#ff2d55;display:none;pointer-events:none;',
-        '}',
+        '#ma-app-icon .ma-app-dot{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:#ff2d55;display:none;pointer-events:none;}',
         '#ma-app-icon .ma-app-dot.on{display:block;}',
-
-        /* ---------- 遮罩 & 面板 ---------- */
-        '#ma-mask{',
-        '  position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';',
-        '  background:rgba(0,0,0,.42);display:none;',
-        '  align-items:center;justify-content:center;',
-        '}',
+        '#ma-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;}',
         '#ma-mask.on{display:flex;}',
-
-        '#ma-panel{',
-        '  width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;',
-        '  background:#fff;border-radius:16px;overflow:hidden;',
-        '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;',
-        '  font-size:14px;color:#222;line-height:1.5;',
-        '  box-shadow:0 12px 40px rgba(0,0,0,.22);',
-        '}',
-
-        '.ma-header{',
-        '  display:flex;align-items:center;justify-content:space-between;',
-        '  padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;',
-        '}',
+        '#ma-panel{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;color:#222;line-height:1.5;box-shadow:0 12px 40px rgba(0,0,0,.22);}',
+        '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;}',
         '.ma-title{font-size:16px;font-weight:700;letter-spacing:.5px;}',
-        '.ma-close{',
-        '  width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;',
-        '  font-size:20px;color:#999;cursor:pointer;line-height:1;',
-        '}',
+        '.ma-close{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#999;cursor:pointer;line-height:1;}',
         '.ma-close:hover{background:#eee;color:#333;}',
-
         '.ma-tabs{display:flex;border-bottom:1px solid #eee;background:#fff;overflow-x:auto;}',
-        '.ma-tab{',
-        '  flex:1 0 auto;padding:10px 12px;text-align:center;cursor:pointer;',
-        '  font-size:13px;color:#666;white-space:nowrap;position:relative;',
-        '  border-bottom:2px solid transparent;transition:.15s;',
-        '}',
+        '.ma-tab{flex:1 0 auto;padding:10px 12px;text-align:center;cursor:pointer;font-size:13px;color:#666;white-space:nowrap;position:relative;border-bottom:2px solid transparent;transition:.15s;}',
         '.ma-tab:hover{color:#333;}',
         '.ma-tab.on{color:#ff4d6d;border-bottom-color:#ff4d6d;font-weight:600;}',
-        '.ma-tab-badge{',
-        '  display:inline-block;min-width:16px;height:16px;line-height:16px;padding:0 4px;',
-        '  border-radius:8px;background:#ff2d55;color:#fff;font-size:10px;margin-left:4px;',
-        '  font-weight:600;vertical-align:middle;',
-        '}',
-
+        '.ma-tab-badge{display:inline-block;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;color:#fff;font-size:10px;margin-left:4px;font-weight:600;vertical-align:middle;}',
         '.ma-body{flex:1;overflow-y:auto;padding:12px 14px 20px;-webkit-overflow-scrolling:touch;}',
-
-        /* ---------- 通用控件 ---------- */
-        '.ma-btn{',
-        '  display:inline-flex;align-items:center;justify-content:center;',
-        '  padding:6px 14px;border-radius:8px;border:1px solid #ddd;background:#fff;',
-        '  color:#333;font-size:13px;cursor:pointer;user-select:none;',
-        '  transition:.15s;line-height:1.4;white-space:nowrap;',
-        '}',
+        '.ma-btn{display:inline-flex;align-items:center;justify-content:center;padding:6px 14px;border-radius:8px;border:1px solid #ddd;background:#fff;color:#333;font-size:13px;cursor:pointer;user-select:none;transition:.15s;line-height:1.4;white-space:nowrap;}',
         '.ma-btn:hover{background:#f6f6f6;}',
         '.ma-btn.primary{background:#ff4d6d;border-color:#ff4d6d;color:#fff;}',
         '.ma-btn.primary:hover{background:#ff3355;}',
         '.ma-btn.danger{background:#fff;border-color:#ffb3c0;color:#e0355a;}',
         '.ma-btn.danger:hover{background:#fff2f5;}',
         '.ma-btn.sm{padding:3px 9px;font-size:12px;border-radius:6px;}',
-        '.ma-btn:disabled{opacity:.45;cursor:not-allowed;}',
         '.ma-btn + .ma-btn{margin-left:6px;}',
-
-        '.ma-input,.ma-select,.ma-textarea{',
-        '  width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:8px;',
-        '  font-size:13px;color:#222;background:#fff;outline:none;font-family:inherit;',
-        '}',
+        '.ma-input,.ma-select,.ma-textarea{width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;color:#222;background:#fff;outline:none;font-family:inherit;}',
         '.ma-input:focus,.ma-select:focus,.ma-textarea:focus{border-color:#ff8fa3;}',
         '.ma-textarea{resize:vertical;min-height:60px;}',
-
         '.ma-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;}',
         '.ma-row.wrap{flex-wrap:wrap;}',
         '.ma-label{font-size:13px;color:#555;white-space:nowrap;}',
         '.ma-empty{text-align:center;color:#bbb;padding:40px 10px;font-size:13px;}',
-        '.ma-divider{height:1px;background:#f0f0f0;margin:12px 0;}',
-
-        /* ---------- 待审核 ---------- */
-        '.ma-pending-item{',
-        '  border:1px solid #f0f0f0;border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff;',
-        '}',
+        '.ma-pending-item{border:1px solid #f0f0f0;border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff;}',
         '.ma-pending-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;}',
-        '.ma-act-tag{',
-        '  display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:600;',
-        '  background:#eef4ff;color:#2b6cff;',
-        '}',
+        '.ma-act-tag{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:600;background:#eef4ff;color:#2b6cff;}',
         '.ma-act-tag.add{background:#e9f9ef;color:#12a150;}',
         '.ma-act-tag.del{background:#ffeef1;color:#e0355a;}',
         '.ma-act-tag.dis{background:#fff5e6;color:#c47d00;}',
@@ -631,13 +537,8 @@
         '.ma-pending-text{font-size:14px;color:#222;word-break:break-all;margin:4px 0 6px;}',
         '.ma-pending-note{font-size:11px;color:#aaa;margin-bottom:8px;}',
         '.ma-pending-actions{display:flex;gap:8px;justify-content:flex-end;}',
-
-        /* ---------- 字卡库 ---------- */
         '.ma-group{border:1px solid #eee;border-radius:12px;margin-bottom:10px;overflow:hidden;background:#fff;}',
-        '.ma-group-head{',
-        '  display:flex;align-items:center;justify-content:space-between;gap:8px;',
-        '  padding:9px 12px;background:#fafafa;cursor:pointer;user-select:none;',
-        '}',
+        '.ma-group-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:#fafafa;cursor:pointer;user-select:none;}',
         '.ma-group-head:hover{background:#f4f4f4;}',
         '.ma-group-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;min-width:0;}',
         '.ma-group-title span.name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
@@ -647,11 +548,7 @@
         '.ma-group.open .ma-arrow{transform:rotate(90deg);}',
         '.ma-group-body{display:none;padding:8px 10px 10px;border-top:1px solid #f0f0f0;}',
         '.ma-group.open .ma-group-body{display:block;}',
-
-        '.ma-card{',
-        '  display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:8px;',
-        '  border:1px solid transparent;transition:.15s;',
-        '}',
+        '.ma-card{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:8px;border:1px solid transparent;transition:.15s;}',
         '.ma-card:hover{background:#fafafa;border-color:#f0f0f0;}',
         '.ma-card-check{margin-top:3px;flex-shrink:0;}',
         '.ma-card-main{flex:1;min-width:0;}',
@@ -659,26 +556,12 @@
         '.ma-card.disabled .ma-card-text{color:#b5b5b5;text-decoration:line-through;}',
         '.ma-card-ops{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;}',
         '.ma-card-meta{display:flex;gap:6px;align-items:center;margin-top:3px;flex-wrap:wrap;}',
-
-        '.ma-badge-dis{',
-        '  display:inline-block;padding:0 6px;border-radius:5px;font-size:10px;line-height:16px;',
-        '  font-weight:600;',
-        '}',
+        '.ma-badge-dis{display:inline-block;padding:0 6px;border-radius:5px;font-size:10px;line-height:16px;font-weight:600;}',
         '.ma-badge-dis.user{background:#ffeef1;color:#e0355a;}',
         '.ma-badge-dis.mj{background:#f0edff;color:#6c4cf0;}',
         '.ma-badge-dis.both{background:#3a3a3a;color:#fff;}',
-
-        '.ma-bulkbar{',
-        '  display:flex;align-items:center;gap:8px;flex-wrap:wrap;',
-        '  padding:8px 10px;background:#fafafa;border-radius:10px;margin-bottom:10px;',
-        '  font-size:12px;color:#666;',
-        '}',
-
-        /* ---------- 历史 ---------- */
-        '.ma-history-item{',
-        '  display:flex;justify-content:space-between;gap:10px;align-items:flex-start;',
-        '  padding:8px 4px;border-bottom:1px dashed #f0f0f0;font-size:12.5px;',
-        '}',
+        '.ma-bulkbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;background:#fafafa;border-radius:10px;margin-bottom:10px;font-size:12px;color:#666;}',
+        '.ma-history-item{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:8px 4px;border-bottom:1px dashed #f0f0f0;font-size:12.5px;}',
         '.ma-history-item:last-child{border-bottom:none;}',
         '.ma-history-main{min-width:0;flex:1;}',
         '.ma-history-text{color:#333;word-break:break-all;}',
@@ -686,43 +569,20 @@
         '.ma-res{font-size:11px;font-weight:700;padding:1px 7px;border-radius:6px;flex-shrink:0;}',
         '.ma-res.agree{background:#e9f9ef;color:#12a150;}',
         '.ma-res.reject{background:#ffeef1;color:#e0355a;}',
-
-        /* ---------- 设置 ---------- */
         '.ma-set-block{border:1px solid #eee;border-radius:12px;padding:12px;margin-bottom:12px;}',
         '.ma-set-title{font-size:13px;font-weight:700;margin-bottom:10px;color:#333;}',
         '.ma-range{width:100%;accent-color:#ff4d6d;}',
-        '.ma-thumb{',
-        '  width:52px;height:52px;border-radius:50%;background:#f0f0f0 center/cover no-repeat;',
-        '  border:1px solid #e5e5e5;flex-shrink:0;',
-        '}',
+        '.ma-thumb{width:52px;height:52px;border-radius:50%;background:#f0f0f0 center/cover no-repeat;border:1px solid #e5e5e5;flex-shrink:0;}',
         '.ma-thumb.square{border-radius:14px;}',
-        '.ma-switch{',
-        '  position:relative;width:44px;height:24px;border-radius:12px;background:#ddd;',
-        '  cursor:pointer;transition:.2s;flex-shrink:0;',
-        '}',
+        '.ma-switch{position:relative;width:44px;height:24px;border-radius:12px;background:#ddd;cursor:pointer;transition:.2s;flex-shrink:0;}',
         '.ma-switch.on{background:#ff4d6d;}',
-        '.ma-switch::after{',
-        '  content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;',
-        '  background:#fff;transition:.2s;',
-        '}',
+        '.ma-switch::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s;}',
         '.ma-switch.on::after{left:22px;}',
-
-        /* ---------- 裁剪器 ---------- */
-        '#ma-crop-mask{',
-        '  position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 200) + ';',
-        '  background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;',
-        '}',
+        '#ma-crop-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 200) + ';background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;}',
         '#ma-crop-mask.on{display:flex;}',
-        '.ma-crop-box{',
-        '  width:min(340px,92vw);background:#fff;border-radius:16px;overflow:hidden;',
-        '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;',
-        '  box-shadow:0 16px 48px rgba(0,0,0,.3);',
-        '}',
+        '.ma-crop-box{width:min(340px,92vw);background:#fff;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 16px 48px rgba(0,0,0,.3);}',
         '.ma-crop-title{padding:13px 16px;font-size:14px;font-weight:700;border-bottom:1px solid #f0f0f0;text-align:center;}',
-        '.ma-crop-stage{',
-        '  position:relative;width:100%;padding:18px 0;display:flex;align-items:center;justify-content:center;',
-        '  background:#f7f7f8;',
-        '}',
+        '.ma-crop-stage{position:relative;width:100%;padding:18px 0;display:flex;align-items:center;justify-content:center;background:#f7f7f8;}',
         '.ma-crop-canvas-wrap{position:relative;touch-action:none;cursor:grab;}',
         '.ma-crop-canvas-wrap:active{cursor:grabbing;}',
         '.ma-crop-canvas{display:block;background:#fff;}',
@@ -731,39 +591,19 @@
         '.ma-crop-zoom input{flex:1;accent-color:#ff4d6d;}',
         '.ma-crop-actions{display:flex;gap:10px;padding:12px 16px 16px;}',
         '.ma-crop-actions .ma-btn{flex:1;padding:9px 0;font-size:14px;}',
-
-        /* ---------- 自定义模态 ---------- */
-        '#ma-modal-mask{',
-        '  position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 300) + ';',
-        '  background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;',
-        '}',
+        '#ma-modal-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 300) + ';background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;}',
         '#ma-modal-mask.on{display:flex;}',
-        '.ma-modal{',
-        '  width:min(360px,90vw);background:#fff;border-radius:14px;overflow:hidden;',
-        '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;',
-        '  box-shadow:0 16px 44px rgba(0,0,0,.28);',
-        '}',
+        '.ma-modal{width:min(360px,90vw);background:#fff;border-radius:14px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;box-shadow:0 16px 44px rgba(0,0,0,.28);}',
         '.ma-modal-title{padding:14px 16px 6px;font-size:15px;font-weight:700;}',
         '.ma-modal-body{padding:6px 16px 14px;font-size:13px;color:#555;}',
         '.ma-modal-actions{display:flex;gap:10px;padding:0 16px 16px;}',
         '.ma-modal-actions .ma-btn{flex:1;padding:8px 0;}',
-
-        /* ---------- Toast ---------- */
-        '#ma-toast{',
-        '  position:fixed;left:50%;bottom:80px;transform:translateX(-50%) translateY(10px);',
-        '  z-index:' + (Z_BASE + 400) + ';background:rgba(0,0,0,.8);color:#fff;',
-        '  padding:8px 18px;border-radius:20px;font-size:13px;opacity:0;pointer-events:none;',
-        '  transition:opacity .25s,transform .25s;white-space:nowrap;max-width:80vw;',
-        '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;',
-        '}',
+        '#ma-toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%) translateY(10px);z-index:' + (Z_BASE + 400) + ';background:rgba(0,0,0,.8);color:#fff;padding:8px 18px;border-radius:20px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;white-space:nowrap;max-width:80vw;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}',
         '#ma-toast.on{opacity:1;transform:translateX(-50%) translateY(0);}',
-
-        /* ---------- 滚动条 ---------- */
         '.ma-body::-webkit-scrollbar{width:6px;}',
         '.ma-body::-webkit-scrollbar-thumb{background:#ddd;border-radius:3px;}',
         '.ma-body::-webkit-scrollbar-track{background:transparent;}'
       ].join('\n');
-
       var style = document.createElement('style');
       style.id = 'ma-style';
       style.type = 'text/css';
@@ -773,32 +613,8 @@
   }
 
   /* ==========================================================================
-   * 占位：后续部分将在此处继续追加
-   * （模块二 UI / 模块三 裁剪 / 模块四 字卡库 / 模块五 审批 / 模块六 发送）
+   * 模块二：双入口 UI 与 隐藏机制
    * ========================================================================== */
-
-  /* 临时声明，避免后续部分引用时未定义 */
-  function updateBadge() { /* 将在第 2 部分实现 */ }
-  function renderPanelBody() { /* 将在第 2 部分实现 */ }
-
-  /* ---------------------------------------------------------------- */
-  /* 暴露调试接口（可选）                                              */
-  /* ---------------------------------------------------------------- */
-  try {
-    window.__MY_AUDIT__ = {
-      version: DATA_VERSION,
-      reload: function () { DB = loadData(); updateBadge(); if (PANEL_OPEN) renderPanelBody(); },
-      tick: function () { safe(tickEngine, 'manual:tick'); },
-      dump: function () { return safe(function () { return JSON.parse(JSON.stringify(DB)); }, 'dump', null); }
-    };
-  } catch (e) {}
-
-})();
-  /* ==========================================================================
-   * 第 2 部分：双入口 UI（悬浮球 + 克隆图标）、隐藏机制、裁剪预览器
-   * ========================================================================== */
-
-  /* --------------------------- 基础：root / toast --------------------------- */
   function ensureRoot() {
     if (ROOT && document.body && document.body.contains(ROOT)) return ROOT;
     ROOT = document.createElement('div');
@@ -811,39 +627,26 @@
     safe(function () {
       ensureRoot();
       var el = document.getElementById('ma-toast');
-      if (!el) {
-        el = document.createElement('div');
-        el.id = 'ma-toast';
-        ROOT.appendChild(el);
-      }
+      if (!el) { el = document.createElement('div'); el.id = 'ma-toast'; ROOT.appendChild(el); }
       el.textContent = String(msg == null ? '' : msg);
       el.classList.add('on');
       clearTimeout(el.__maTimer);
-      el.__maTimer = setTimeout(function () {
-        try { el.classList.remove('on'); } catch (e) {}
-      }, ms || 1800);
+      el.__maTimer = setTimeout(function () { try { el.classList.remove('on'); } catch (e) {} }, ms || 1800);
     }, 'toast');
   }
 
-  /* ==========================================================================
-   * 悬浮球
-   * ========================================================================== */
   function buildFab() {
     safe(function () {
       ensureRoot();
       var old = document.getElementById('ma-fab');
       if (old && old.parentNode) old.parentNode.removeChild(old);
-
       FAB = document.createElement('div');
       FAB.id = 'ma-fab';
       FAB.innerHTML = '<span class="ma-fab-txt">审</span><i class="ma-fab-dot"></i>';
       ROOT.appendChild(FAB);
-
       applyFabPosition();
       bindFabDrag();
-
       FAB.addEventListener('click', function (e) {
-        // 拖拽后不触发点击（由 bindFabDrag 内部标记）
         if (FAB.__maMoved) { FAB.__maMoved = false; return; }
         try { e.stopPropagation(); } catch (err) {}
         openPanel();
@@ -854,25 +657,15 @@
   function applyFabPosition() {
     safe(function () {
       if (!FAB) return;
-      var s = DB.settings;
-      var size = s.ballSize || 52;
-      var w = window.innerWidth || 375;
-      var h = window.innerHeight || 667;
-      var x, y;
-
-      if (s.ballPos && typeof s.ballPos.x === 'number' && typeof s.ballPos.y === 'number') {
+      var s = DB.settings, size = s.ballSize || 52, w = window.innerWidth, h = window.innerHeight, x, y;
+      if (s.ballPos && typeof s.ballPos.x === 'number') {
         x = clamp(s.ballPos.x, 4, Math.max(4, w - size - 4));
         y = clamp(s.ballPos.y, 4, Math.max(4, h - size - 4));
       } else {
-        x = w - size - 18;
-        y = h - size - 96;
+        x = w - size - 18; y = h - size - 96;
       }
-      FAB.style.left = x + 'px';
-      FAB.style.top = y + 'px';
-      FAB.style.right = 'auto';
-      FAB.style.bottom = 'auto';
-      FAB.style.width = size + 'px';
-      FAB.style.height = size + 'px';
+      FAB.style.left = x + 'px'; FAB.style.top = y + 'px'; FAB.style.right = 'auto'; FAB.style.bottom = 'auto';
+      FAB.style.width = size + 'px'; FAB.style.height = size + 'px';
     }, 'applyFabPosition');
   }
 
@@ -880,288 +673,137 @@
     safe(function () {
       if (!FAB || FAB.__maDragBound) return;
       FAB.__maDragBound = true;
-
-      var dragging = false;
-      var startX = 0, startY = 0, originX = 0, originY = 0;
-
+      var dragging = false, startX = 0, startY = 0, originX = 0, originY = 0;
       function onDown(e) {
         try {
           if (e.pointerType === 'mouse' && e.button !== 0) return;
-          dragging = true;
-          FAB.__maMoved = false;
+          dragging = true; FAB.__maMoved = false;
           var r = FAB.getBoundingClientRect();
-          startX = e.clientX;
-          startY = e.clientY;
-          originX = r.left;
-          originY = r.top;
+          startX = e.clientX; startY = e.clientY; originX = r.left; originY = r.top;
           FAB.style.transition = 'none';
-          if (FAB.setPointerCapture && e.pointerId != null) {
-            try { FAB.setPointerCapture(e.pointerId); } catch (err) {}
-          }
+          if (FAB.setPointerCapture && e.pointerId != null) { try { FAB.setPointerCapture(e.pointerId); } catch (err) {} }
           e.preventDefault();
         } catch (err) {}
       }
-
       function onMove(e) {
         try {
           if (!dragging) return;
-          var dx = e.clientX - startX;
-          var dy = e.clientY - startY;
-          if (!FAB.__maMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
-            FAB.__maMoved = true;
-          }
+          var dx = e.clientX - startX, dy = e.clientY - startY;
+          if (!FAB.__maMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) FAB.__maMoved = true;
           if (!FAB.__maMoved) return;
-
-          var size = FAB.offsetWidth || DB.settings.ballSize || 52;
-          var w = window.innerWidth;
-          var h = window.innerHeight;
+          var size = FAB.offsetWidth || DB.settings.ballSize || 52, w = window.innerWidth, h = window.innerHeight;
           var x = clamp(originX + dx, 4, Math.max(4, w - size - 4));
           var y = clamp(originY + dy, 4, Math.max(4, h - size - 4));
-          FAB.style.left = x + 'px';
-          FAB.style.top = y + 'px';
+          FAB.style.left = x + 'px'; FAB.style.top = y + 'px';
           e.preventDefault();
         } catch (err) {}
       }
-
       function onUp(e) {
         try {
           if (!dragging) return;
-          dragging = false;
-          FAB.style.transition = '';
+          dragging = false; FAB.style.transition = '';
           if (FAB.__maMoved) {
             var size = FAB.offsetWidth || 52;
-            var x = parseFloat(FAB.style.left) || 0;
-            var y = parseFloat(FAB.style.top) || 0;
-            DB.settings.ballPos = {
-              x: clamp(x, 4, Math.max(4, window.innerWidth - size - 4)),
-              y: clamp(y, 4, Math.max(4, window.innerHeight - size - 4))
-            };
+            DB.settings.ballPos = { x: clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)), y: clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) };
             saveData();
           }
-          if (FAB.releasePointerCapture && e.pointerId != null) {
-            try { FAB.releasePointerCapture(e.pointerId); } catch (err) {}
-          }
+          if (FAB.releasePointerCapture && e.pointerId != null) { try { FAB.releasePointerCapture(e.pointerId); } catch (err) {} }
         } catch (err) {}
       }
-
       if (window.PointerEvent) {
-        FAB.addEventListener('pointerdown', onDown);
-        FAB.addEventListener('pointermove', onMove);
-        FAB.addEventListener('pointerup', onUp);
-        FAB.addEventListener('pointercancel', onUp);
-      } else {
-        // 兼容老浏览器
-        FAB.addEventListener('mousedown', function (e) {
-          onDown({ clientX: e.clientX, clientY: e.clientY, button: e.button, preventDefault: function () { e.preventDefault(); } });
-          function mm(ev) { onMove({ clientX: ev.clientX, clientY: ev.clientY, preventDefault: function () { ev.preventDefault(); } }); }
-          function mu(ev) { onUp({}); document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); }
-          document.addEventListener('mousemove', mm);
-          document.addEventListener('mouseup', mu);
-        });
-        FAB.addEventListener('touchstart', function (e) {
-          var t = e.touches[0];
-          onDown({ clientX: t.clientX, clientY: t.clientY, preventDefault: function () { e.preventDefault(); } });
-        }, { passive: false });
-        FAB.addEventListener('touchmove', function (e) {
-          var t = e.touches[0];
-          onMove({ clientX: t.clientX, clientY: t.clientY, preventDefault: function () { e.preventDefault(); } });
-        }, { passive: false });
-        FAB.addEventListener('touchend', function () { onUp({}); });
+        FAB.addEventListener('pointerdown', onDown); FAB.addEventListener('pointermove', onMove);
+        FAB.addEventListener('pointerup', onUp); FAB.addEventListener('pointercancel', onUp);
       }
     }, 'bindFabDrag');
   }
 
-  /* ==========================================================================
-   * 原生 App 图标（克隆法）
-   * ========================================================================== */
-  var APP_ICON_IMG_EL = null;
-
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
-
       var natives = document.querySelectorAll('.app:not([data-ma-clone])');
       if (!natives.length) return false;
-
-      // 优先挑可见节点作为样板
       var src = null;
-      for (var i = 0; i < natives.length; i++) {
-        var el = natives[i];
-        if (el.offsetParent !== null && el.getBoundingClientRect().width > 0) { src = el; break; }
-      }
+      for (var i = 0; i < natives.length; i++) { if (natives[i].offsetParent !== null && natives[i].getBoundingClientRect().width > 0) { src = natives[i]; break; } }
       if (!src) src = natives[0];
-
       var clone = null;
-      try {
-        clone = src.cloneNode(true);
-      } catch (e) {
-        return false;
-      }
+      try { clone = src.cloneNode(true); } catch (e) { return false; }
       if (!clone) return false;
-
-      // 1. 清除所有 id，避免冲突
       if (clone.id) clone.removeAttribute('id');
       var ids = clone.querySelectorAll ? clone.querySelectorAll('[id]') : [];
-      for (var k = 0; k < ids.length; k++) {
-        try { ids[k].removeAttribute('id'); } catch (e2) {}
-      }
-
-      // 2. 清除内联样式（保留结构，样式由原生 CSS 继承）
+      for (var k = 0; k < ids.length; k++) { try { ids[k].removeAttribute('id'); } catch (e2) {} }
       clone.removeAttribute('style');
       var styled = clone.querySelectorAll ? clone.querySelectorAll('[style]') : [];
-      for (var si = 0; si < styled.length; si++) {
-        try { styled[si].removeAttribute('style'); } catch (e3) {}
-      }
-
-      // 3. 移除原生交互态
-      try {
-        clone.classList.remove('active', 'dragging', 'selected', 'on');
-      } catch (e4) {}
-
-      // 4. 记录是否存在图形元素（img/svg/canvas）
-      var hasGraphic = false;
-      try {
-        hasGraphic = !!(clone.querySelector('img,svg,canvas,picture') ||
-          /^(IMG|SVG|CANVAS|PICTURE)$/i.test(clone.tagName || ''));
-      } catch (e5) {}
-
-      // 5. 清空所有文本节点
+      for (var si = 0; si < styled.length; si++) { try { styled[si].removeAttribute('style'); } catch (e3) {} }
+      try { clone.classList.remove('active', 'dragging', 'selected', 'on'); } catch (e4) {}
       try {
         var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false);
-        var textNodes = [];
-        var tn;
+        var textNodes = [], tn;
         while ((tn = walker.nextNode())) textNodes.push(tn);
-        for (var ti = 0; ti < textNodes.length; ti++) {
-          textNodes[ti].nodeValue = '';
-        }
-      } catch (e6) {
-        try { if (!hasGraphic) clone.textContent = ''; } catch (e7) {}
-      }
-
-      // 6. 写入「审核」文字
+        for (var ti = 0; ti < textNodes.length; ti++) textNodes[ti].nodeValue = '';
+      } catch (e6) {}
       var nameEl = null;
-      try {
-        nameEl = clone.querySelector(
-          '.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]'
-        );
-      } catch (e8) {}
-
+      try { nameEl = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]'); } catch (e8) {}
       if (nameEl && !/^(IMG|SVG|CANVAS)$/i.test(nameEl.tagName || '')) {
         nameEl.textContent = '审核';
       } else {
         var span = document.createElement('div');
         span.className = 'ma-clone-name';
         span.textContent = '审核';
-        span.style.cssText =
-          'font-size:12px;line-height:1.4;text-align:center;width:100%;' +
-          'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-        // 若 clone 本身是纯文本节点容器，直接塞文字
+        span.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
         try { clone.appendChild(span); } catch (e9) {}
       }
-
-      // 7. 红点
       var dot = document.createElement('i');
       dot.className = 'ma-app-dot';
       try { clone.appendChild(dot); } catch (e10) {}
-
-      // 8. 绑定标识
       clone.id = 'ma-app-icon';
       clone.setAttribute('data-ma-clone', '1');
-
-      // 9. 记录图标图形容器（用于后续换图）
-      try {
-        APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
-      } catch (e11) {
-        APP_ICON_IMG_EL = null;
-      }
-
-      // 10. 注入
+      try { APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]'); } catch (e11) { APP_ICON_IMG_EL = null; }
       var grid = document.querySelector('.app-grid');
-      if (grid) {
-        grid.appendChild(clone);
-      } else if (src.parentNode) {
-        src.parentNode.insertBefore(clone, src.nextSibling);
-      } else {
-        return false;
-      }
-
+      if (grid) grid.appendChild(clone); else if (src.parentNode) src.parentNode.insertBefore(clone, src.nextSibling); else return false;
       APP_ICON_EL = clone;
-
-      // 11. 点击 → 打开面板（带拖拽位移判定，避免误触）
       var pdX = 0, pdY = 0, pdMoved = false;
-      clone.addEventListener('pointerdown', function (e) {
-        pdX = e.clientX; pdY = e.clientY; pdMoved = false;
-      }, true);
-      clone.addEventListener('pointermove', function (e) {
-        if (Math.abs(e.clientX - pdX) > 6 || Math.abs(e.clientY - pdY) > 6) pdMoved = true;
-      }, true);
+      clone.addEventListener('pointerdown', function (e) { pdX = e.clientX; pdY = e.clientY; pdMoved = false; }, true);
+      clone.addEventListener('pointermove', function (e) { if (Math.abs(e.clientX - pdX) > 6 || Math.abs(e.clientY - pdY) > 6) pdMoved = true; }, true);
       clone.addEventListener('click', function (e) {
         if (pdMoved) { pdMoved = false; return; }
         try { e.preventDefault(); e.stopPropagation(); } catch (err) {}
         openPanel();
       }, true);
-
-      applyVisibility();
-      applyAppearance();
-      updateBadge();
+      applyVisibility(); applyAppearance(); updateBadge();
       return true;
     }, 'injectAppIcon', false);
   }
 
-  /* 轮询注入（原页面可能异步渲染 .app-grid） */
   function startAppIconWatcher() {
     safe(function () {
       var tries = 0;
       if (appIconInjectTimer) clearInterval(appIconInjectTimer);
       if (injectAppIcon()) return;
-
       appIconInjectTimer = setInterval(function () {
         safe(function () {
           tries++;
-          if (injectAppIcon() || tries >= 40) {
-            clearInterval(appIconInjectTimer);
-            appIconInjectTimer = null;
-          }
+          if (injectAppIcon() || tries >= 40) { clearInterval(appIconInjectTimer); appIconInjectTimer = null; }
         }, 'appIconWatcher:tick');
       }, 800);
     }, 'startAppIconWatcher');
   }
 
-  /* 重建克隆图标（用于"移除自定义图片"时还原外观） */
   function refreshAppIcon() {
     safe(function () {
-      if (APP_ICON_EL && APP_ICON_EL.parentNode) {
-        try { APP_ICON_EL.parentNode.removeChild(APP_ICON_EL); } catch (e) {}
-      }
-      APP_ICON_EL = null;
-      APP_ICON_IMG_EL = null;
-      injectAppIcon();
+      if (APP_ICON_EL && APP_ICON_EL.parentNode) { try { APP_ICON_EL.parentNode.removeChild(APP_ICON_EL); } catch (e) {} }
+      APP_ICON_EL = null; APP_ICON_IMG_EL = null; injectAppIcon();
     }, 'refreshAppIcon');
   }
 
-  /* ==========================================================================
-   * 隐藏机制
-   * ========================================================================== */
   function applyVisibility() {
     safe(function () {
       var hide = !!(DB.settings.hideAll && !URL_FORCE_SHOW);
-      if (FAB) {
-        if (hide) FAB.classList.add('ma-hidden');
-        else FAB.classList.remove('ma-hidden');
-      }
-      if (APP_ICON_EL) {
-        if (hide) APP_ICON_EL.classList.add('ma-hidden');
-        else APP_ICON_EL.classList.remove('ma-hidden');
-      }
-      // 隐藏时劫持原生 App 点击作为"唯一恢复入口"
+      if (FAB) { if (hide) FAB.classList.add('ma-hidden'); else FAB.classList.remove('ma-hidden'); }
+      if (APP_ICON_EL) { if (hide) APP_ICON_EL.classList.add('ma-hidden'); else APP_ICON_EL.classList.remove('ma-hidden'); }
       bindNativeHijack(hide);
     }, 'applyVisibility');
   }
 
-  /**
-   * hideAll 开启时：点击原网站自己的 .app 图标 → 打开我们的面板
-   * （不生成任何透明条，只在开关生效期间临时挂监听，关闭后立即解绑）
-   */
   function bindNativeHijack(on) {
     safe(function () {
       var natives = document.querySelectorAll('.app:not([data-ma-clone])');
@@ -1172,9 +814,7 @@
             el.__maHijack = function (e) {
               try {
                 if (!DB.settings.hideAll) return;
-                e.preventDefault();
-                e.stopPropagation();
-                openPanel();
+                e.preventDefault(); e.stopPropagation(); openPanel();
               } catch (err) {}
             };
             el.addEventListener('click', el.__maHijack, true);
@@ -1187,20 +827,13 @@
     }, 'bindNativeHijack');
   }
 
-  /* ==========================================================================
-   * 外观应用
-   * ========================================================================== */
   function applyAppearance() {
     safe(function () {
       var s = DB.settings;
-
-      /* 悬浮球 */
       if (FAB) {
         var size = clamp(s.ballSize || 52, 36, 88);
-        FAB.style.width = size + 'px';
-        FAB.style.height = size + 'px';
+        FAB.style.width = size + 'px'; FAB.style.height = size + 'px';
         FAB.style.fontSize = Math.max(11, Math.round(size * 0.30)) + 'px';
-
         if (s.ballImage) {
           FAB.style.backgroundImage = 'url("' + s.ballImage + '")';
           FAB.style.backgroundColor = 'transparent';
@@ -1211,159 +844,79 @@
           FAB.classList.remove('ma-has-img');
         }
       }
-
-      /* 原生图标 */
-      if (APP_ICON_EL) {
-        if (s.appImage) {
-          var holder = APP_ICON_IMG_EL || APP_ICON_EL;
-          try {
-            if (holder.tagName === 'IMG') {
-              holder.src = s.appImage;
-            } else if (holder.tagName === 'SVG') {
-              // 无法内联换图，退回到外层背景
-              APP_ICON_EL.style.backgroundImage = 'url("' + s.appImage + '")';
-              APP_ICON_EL.style.backgroundSize = 'cover';
-              APP_ICON_EL.style.backgroundPosition = 'center';
-            } else {
-              holder.style.backgroundImage = 'url("' + s.appImage + '")';
-              holder.style.backgroundSize = 'cover';
-              holder.style.backgroundPosition = 'center';
-              holder.style.backgroundRepeat = 'no-repeat';
-            }
-          } catch (e) {}
-        } else {
-          // 无自定义图片：保持克隆时的原生外观
-          try {
-            if (APP_ICON_IMG_EL) {
-              if (APP_ICON_IMG_EL.tagName !== 'IMG' && APP_ICON_IMG_EL.tagName !== 'SVG') {
-                APP_ICON_IMG_EL.style.backgroundImage = '';
-              }
-            }
-          } catch (e2) {}
-        }
+      if (APP_ICON_EL && s.appImage) {
+        var holder = APP_ICON_IMG_EL || APP_ICON_EL;
+        try {
+          if (holder.tagName === 'IMG') holder.src = s.appImage;
+          else if (holder.tagName === 'SVG') {
+            APP_ICON_EL.style.backgroundImage = 'url("' + s.appImage + '")';
+            APP_ICON_EL.style.backgroundSize = 'cover'; APP_ICON_EL.style.backgroundPosition = 'center';
+          } else {
+            holder.style.backgroundImage = 'url("' + s.appImage + '")';
+            holder.style.backgroundSize = 'cover'; holder.style.backgroundPosition = 'center'; holder.style.backgroundRepeat = 'no-repeat';
+          }
+        } catch (e) {}
+      } else if (APP_ICON_EL && !s.appImage && APP_ICON_IMG_EL) {
+        try {
+          if (APP_ICON_IMG_EL.tagName !== 'IMG' && APP_ICON_IMG_EL.tagName !== 'SVG') APP_ICON_IMG_EL.style.backgroundImage = '';
+        } catch (e2) {}
       }
     }, 'applyAppearance');
   }
 
-  /* ==========================================================================
-   * 红点（静默，绝不 alert）
-   * ========================================================================== */
   function updateBadge() {
     safe(function () {
       var n = pendingCount();
-
       var fabDot = FAB ? FAB.querySelector('.ma-fab-dot') : null;
-      if (fabDot) {
-        if (n > 0) fabDot.classList.add('on');
-        else fabDot.classList.remove('on');
-      }
-
+      if (fabDot) { if (n > 0) fabDot.classList.add('on'); else fabDot.classList.remove('on'); }
       var appDot = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null;
-      if (appDot) {
-        if (n > 0) appDot.classList.add('on');
-        else appDot.classList.remove('on');
-      }
-
+      if (appDot) { if (n > 0) appDot.classList.add('on'); else appDot.classList.remove('on'); }
       var tb = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null;
-      if (tb) {
-        tb.textContent = n > 99 ? '99+' : String(n);
-        tb.style.display = n > 0 ? 'inline-block' : 'none';
-      }
+      if (tb) { tb.textContent = n > 99 ? '99+' : String(n); tb.style.display = n > 0 ? 'inline-block' : 'none'; }
     }, 'updateBadge');
   }
 
   /* ==========================================================================
-   * 面板骨架
+   * 模块三、四、五 UI 骨架与渲染逻辑 (简写整合)
    * ========================================================================== */
-  var TAB_DEF = [
-    { key: 'pending', label: '待审核' },
-    { key: 'cards',   label: '字卡库' },
-    { key: 'history', label: '历史档案' },
-    { key: 'settings', label: '设置' }
-  ];
+  var TAB_DEF = [{ key: 'pending', label: '待审核' }, { key: 'cards', label: '字卡库' }, { key: 'history', label: '历史档案' }, { key: 'settings', label: '设置' }];
 
   function buildUI() {
     safe(function () {
       ensureRoot();
-
-      /* ---------- 面板遮罩 ---------- */
       var oldMask = document.getElementById('ma-mask');
       if (oldMask && oldMask.parentNode) oldMask.parentNode.removeChild(oldMask);
-
-      MASK = document.createElement('div');
-      MASK.id = 'ma-mask';
-
-      PANEL = document.createElement('div');
-      PANEL.id = 'ma-panel';
-
+      MASK = document.createElement('div'); MASK.id = 'ma-mask';
+      PANEL = document.createElement('div'); PANEL.id = 'ma-panel';
       var tabHtml = '';
       for (var i = 0; i < TAB_DEF.length; i++) {
         var t = TAB_DEF[i];
-        tabHtml += '<div class="ma-tab' + (t.key === CURRENT_TAB ? ' on' : '') +
-          '" data-tab="' + t.key + '">' + t.label +
-          (t.key === 'pending' ? '<span class="ma-tab-badge" style="display:none;">0</span>' : '') +
-          '</div>';
+        tabHtml += '<div class="ma-tab' + (t.key === CURRENT_TAB ? ' on' : '') + '" data-tab="' + t.key + '">' + t.label + (t.key === 'pending' ? '<span class="ma-tab-badge" style="display:none;">0</span>' : '') + '</div>';
       }
-
-      PANEL.innerHTML =
-        '<div class="ma-header">' +
-          '<div class="ma-title">审核中心</div>' +
-          '<div class="ma-close" id="ma-close">×</div>' +
-        '</div>' +
-        '<div class="ma-tabs" id="ma-tabs">' + tabHtml + '</div>' +
-        '<div class="ma-body" id="ma-body"></div>';
-
-      MASK.appendChild(PANEL);
-      ROOT.appendChild(MASK);
-
-      // 关闭
+      PANEL.innerHTML = '<div class="ma-header"><div class="ma-title">审核中心</div><div class="ma-close" id="ma-close">×</div></div><div class="ma-tabs" id="ma-tabs">' + tabHtml + '</div><div class="ma-body" id="ma-body"></div>';
+      MASK.appendChild(PANEL); ROOT.appendChild(MASK);
       var closeBtn = PANEL.querySelector('#ma-close');
       if (closeBtn) closeBtn.addEventListener('click', closePanel);
-
-      MASK.addEventListener('click', function (e) {
-        if (e.target === MASK) closePanel();
-      });
-
-      // Tab 切换
+      MASK.addEventListener('click', function (e) { if (e.target === MASK) closePanel(); });
       var tabsBox = PANEL.querySelector('#ma-tabs');
       if (tabsBox) {
         tabsBox.addEventListener('click', function (e) {
           var el = e.target;
           while (el && el !== tabsBox && !el.getAttribute('data-tab')) el = el.parentNode;
           if (!el || el === tabsBox) return;
-          var key = el.getAttribute('data-tab');
-          if (!key) return;
-          CURRENT_TAB = key;
-          renderTabs();
-          renderPanelBody();
+          CURRENT_TAB = el.getAttribute('data-tab');
+          renderTabs(); renderPanelBody();
         });
       }
-
-      // 裁剪遮罩 / 通用模态 / Toast 容器
-      if (!document.getElementById('ma-crop-mask')) {
-        var cm = document.createElement('div');
-        cm.id = 'ma-crop-mask';
-        ROOT.appendChild(cm);
-      }
-      if (!document.getElementById('ma-modal-mask')) {
-        var mm = document.createElement('div');
-        mm.id = 'ma-modal-mask';
-        ROOT.appendChild(mm);
-      }
-      if (!document.getElementById('ma-toast')) {
-        var tt = document.createElement('div');
-        tt.id = 'ma-toast';
-        ROOT.appendChild(tt);
-      }
-
-      // ESC 关闭
+      if (!document.getElementById('ma-crop-mask')) { var cm = document.createElement('div'); cm.id = 'ma-crop-mask'; ROOT.appendChild(cm); }
+      if (!document.getElementById('ma-modal-mask')) { var mm = document.createElement('div'); mm.id = 'ma-modal-mask'; ROOT.appendChild(mm); }
+      if (!document.getElementById('ma-toast')) { var tt = document.createElement('div'); tt.id = 'ma-toast'; ROOT.appendChild(tt); }
       if (!window.__maEscBound) {
         window.__maEscBound = true;
         document.addEventListener('keydown', function (e) {
           try {
             if (e.key === 'Escape') {
-              var cm2 = document.getElementById('ma-crop-mask');
-              var mm2 = document.getElementById('ma-modal-mask');
+              var cm2 = document.getElementById('ma-crop-mask'), mm2 = document.getElementById('ma-modal-mask');
               if (cm2 && cm2.classList.contains('on')) { cm2.classList.remove('on'); return; }
               if (mm2 && mm2.classList.contains('on')) { mm2.classList.remove('on'); return; }
               if (PANEL_OPEN) closePanel();
@@ -1379,1401 +932,295 @@
       if (!PANEL) return;
       var tabs = PANEL.querySelectorAll('.ma-tab');
       for (var i = 0; i < tabs.length; i++) {
-        var t = tabs[i];
-        if (t.getAttribute('data-tab') === CURRENT_TAB) t.classList.add('on');
-        else t.classList.remove('on');
+        if (tabs[i].getAttribute('data-tab') === CURRENT_TAB) tabs[i].classList.add('on');
+        else tabs[i].classList.remove('on');
       }
       updateBadge();
     }, 'renderTabs');
   }
 
-  function openPanel() {
-    safe(function () {
-      ensureRoot();
-      if (!MASK) buildUI();
-      if (!MASK) return;
-      MASK.classList.add('on');
-      PANEL_OPEN = true;
-      renderTabs();
-      renderPanelBody();
-      updateBadge();
-    }, 'openPanel');
-  }
+  function openPanel() { safe(function () { ensureRoot(); if (!MASK) buildUI(); if (!MASK) return; MASK.classList.add('on'); PANEL_OPEN = true; renderTabs(); renderPanelBody(); updateBadge(); }, 'openPanel'); }
+  function closePanel() { safe(function () { if (MASK) MASK.classList.remove('on'); PANEL_OPEN = false; }, 'closePanel'); }
 
-  function closePanel() {
-    safe(function () {
-      if (MASK) MASK.classList.remove('on');
-      PANEL_OPEN = false;
-    }, 'closePanel');
-  }
-
-  /* 面板 body 调度（第 3 部分会覆盖各 Tab 渲染与事件绑定） */
   function renderPanelBody() {
     safe(function () {
       if (!PANEL) return;
       var body = PANEL.querySelector('#ma-body');
       if (!body) return;
-
       var html = '';
       if (CURRENT_TAB === 'pending') html = renderPendingTab();
       else if (CURRENT_TAB === 'cards') html = renderCardsTab();
       else if (CURRENT_TAB === 'history') html = renderHistoryTab();
       else html = renderSettingsTab();
-
       body.innerHTML = html || '';
-      bindPanelBodyEvents(body);
+      if (CURRENT_TAB === 'pending') bindPendingEvents(body);
+      else if (CURRENT_TAB === 'cards') bindCardsEvents(body);
+      else if (CURRENT_TAB === 'settings') bindSettingsEvents(body);
     }, 'renderPanelBody');
   }
 
-  function bindPanelBodyEvents(body) {
-    safe(function () {
-      if (CURRENT_TAB === 'pending') bindPendingEvents(body);
-      else if (CURRENT_TAB === 'cards') bindCardsEvents(body);
-      else if (CURRENT_TAB === 'history') bindHistoryEvents(body);
-      else bindSettingsEvents(body);
-    }, 'bindPanelBodyEvents');
-  }
-
-  /* ---- 第 3 部分将覆盖以下占位（先定义，保证本部分独立运行不报错） ---- */
-  function renderPendingTab() { return '<div class="ma-empty">待审核（加载中…）</div>'; }
-  function renderCardsTab()   { return '<div class="ma-empty">字卡库（加载中…）</div>'; }
-  function renderHistoryTab() { return '<div class="ma-empty">历史档案（加载中…）</div>'; }
-  function bindPendingEvents() {}
-  function bindCardsEvents() {}
-  function bindHistoryEvents() {}
-
-  /* ==========================================================================
-   * 设置页（模块三 + 隐藏开关 + 导入导出）
-   * ========================================================================== */
-  function renderSettingsTab() {
-    var s = DB.settings;
-    var h = '';
-
-    /* ---- 悬浮球外观 ---- */
-    h += '<div class="ma-set-block">';
-    h += '<div class="ma-set-title">悬浮球外观</div>';
-
-    h += '<div class="ma-row">';
-    h += '<span class="ma-label" style="width:52px;">颜色</span>';
-    h += '<input type="color" id="ma-set-color" value="' + esc(s.ballColor) + '" ' +
-         'style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;background:none;padding:0;cursor:pointer;">';
-    h += '<span style="font-size:11px;color:#bbb;">' + esc(s.ballColor) + '</span>';
-    h += '</div>';
-
-    h += '<div class="ma-row">';
-    h += '<span class="ma-label" style="width:52px;">大小</span>';
-    h += '<input type="range" class="ma-range" id="ma-set-size" min="36" max="88" step="1" value="' + s.ballSize + '">';
-    h += '<span class="ma-label" id="ma-set-size-val" style="width:44px;text-align:right;">' + s.ballSize + 'px</span>';
-    h += '</div>';
-
-    h += '<div class="ma-row">';
-    h += '<div class="ma-thumb" id="ma-set-ball-thumb" style="' +
-         (s.ballImage
-           ? 'background-image:url(&quot;' + s.ballImage + '&quot;);'
-           : 'background:' + esc(s.ballColor) + ';') + '"></div>';
-    h += '<button class="ma-btn sm" id="ma-set-ball-upload">上传图片</button>';
-    if (s.ballImage) h += '<button class="ma-btn sm danger" id="ma-set-ball-clear">移除图片</button>';
-    h += '</div>';
-    h += '<div style="font-size:11px;color:#aaa;">上传后为正圆形裁剪预览，可拖动调整位置</div>';
-    h += '</div>';
-
-    /* ---- 图标外观 ---- */
-    h += '<div class="ma-set-block">';
-    h += '<div class="ma-set-title">审核图标外观</div>';
-    h += '<div class="ma-row">';
-    h += '<div class="ma-thumb square" id="ma-set-app-thumb" style="' +
-         (s.appImage
-           ? 'background-image:url(&quot;' + s.appImage + '&quot;);'
-           : 'background:#f5f5f5;') + '"></div>';
-    h += '<button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>';
-    if (s.appImage) h += '<button class="ma-btn sm danger" id="ma-set-app-clear">移除图片</button>';
-    h += '</div>';
-    h += '<div style="font-size:11px;color:#aaa;">尺寸继承原生图标样式，不可改大小；上传为圆角方形裁剪预览</div>';
-    h += '</div>';
-
-    /* ---- 隐藏机制 ---- */
-    h += '<div class="ma-set-block">';
-    h += '<div class="ma-set-title">入口显示</div>';
-    h += '<div class="ma-row" style="justify-content:space-between;">';
-    h += '<div>';
-    h += '<div style="font-size:13px;color:#333;">隐藏所有入口</div>';
-    h += '<div style="font-size:11px;color:#aaa;margin-top:2px;">开启后悬浮球与图标隐藏；点击原生 App 图标可进入面板恢复；' +
-         '或在网址后加 <b>?show_audit=true</b> 强制唤醒</div>';
-    h += '</div>';
-    h += '<div class="ma-switch' + (s.hideAll ? ' on' : '') + '" id="ma-set-hide"></div>';
-    h += '</div>';
-    h += '</div>';
-
-    /* ---- 导入导出 ---- */
-    h += '<div class="ma-set-block">';
-    h += '<div class="ma-set-title">数据备份</div>';
-    h += '<div class="ma-row wrap">';
-    h += '<button class="ma-btn" id="ma-export">导出备份</button>';
-    h += '<button class="ma-btn danger" id="ma-import">导入备份</button>';
-    h += '<input type="file" id="ma-import-file" accept=".json,application/json" style="display:none;">';
-    h += '</div>';
-    h += '<div style="font-size:11px;color:#aaa;">备份包含：字卡库、待审核、历史档案、外观设置</div>';
-    h += '</div>';
-
-    return h;
-  }
-
-  function bindSettingsEvents(body) {
-    safe(function () {
-      if (!body) return;
-
-      /* 颜色 */
-      var colorEl = body.querySelector('#ma-set-color');
-      if (colorEl) {
-        colorEl.addEventListener('input', function () {
-          safe(function () {
-            DB.settings.ballColor = colorEl.value;
-            var thumb = body.querySelector('#ma-set-ball-thumb');
-            if (thumb && !DB.settings.ballImage) thumb.style.background = colorEl.value;
-            applyAppearance();
-          }, 'setColor:input');
-        });
-        colorEl.addEventListener('change', function () {
-          safe(function () {
-            DB.settings.ballColor = colorEl.value;
-            saveData();
-            applyAppearance();
-            renderPanelBody();
-          }, 'setColor:change');
-        });
-      }
-
-      /* 大小 */
-      var sizeEl = body.querySelector('#ma-set-size');
-      var sizeVal = body.querySelector('#ma-set-size-val');
-      if (sizeEl) {
-        sizeEl.addEventListener('input', function () {
-          safe(function () {
-            var v = clamp(parseInt(sizeEl.value, 10) || 52, 36, 88);
-            DB.settings.ballSize = v;
-            if (sizeVal) sizeVal.textContent = v + 'px';
-            applyAppearance();
-            applyFabPosition();
-          }, 'setSize:input');
-        });
-        sizeEl.addEventListener('change', function () {
-          safe(function () {
-            DB.settings.ballSize = clamp(parseInt(sizeEl.value, 10) || 52, 36, 88);
-            saveData();
-            applyAppearance();
-            applyFabPosition();
-          }, 'setSize:change');
-        });
-      }
-
-      /* 悬浮球图片 */
-      var ballUp = body.querySelector('#ma-set-ball-upload');
-      if (ballUp) {
-        ballUp.addEventListener('click', function () {
-          openCropper({
-            title: '裁剪悬浮球图片',
-            shape: 'circle',
-            onConfirm: function (dataURL) {
-              safe(function () {
-                DB.settings.ballImage = dataURL;
-                saveData();
-                applyAppearance();
-                renderPanelBody();
-                toast('悬浮球图片已更新');
-              }, 'ballImage:confirm');
-            }
-          });
-        });
-      }
-      var ballClear = body.querySelector('#ma-set-ball-clear');
-      if (ballClear) {
-        ballClear.addEventListener('click', function () {
-          safe(function () {
-            DB.settings.ballImage = '';
-            saveData();
-            applyAppearance();
-            renderPanelBody();
-            toast('已移除悬浮球图片');
-          }, 'ballImage:clear');
-        });
-      }
-
-      /* 图标图片 */
-      var appUp = body.querySelector('#ma-set-app-upload');
-      if (appUp) {
-        appUp.addEventListener('click', function () {
-          openCropper({
-            title: '裁剪审核图标',
-            shape: 'square',
-            onConfirm: function (dataURL) {
-              safe(function () {
-                DB.settings.appImage = dataURL;
-                saveData();
-                applyAppearance();
-                renderPanelBody();
-                toast('图标图片已更新');
-              }, 'appImage:confirm');
-            }
-          });
-        });
-      }
-      var appClear = body.querySelector('#ma-set-app-clear');
-      if (appClear) {
-        appClear.addEventListener('click', function () {
-          safe(function () {
-            DB.settings.appImage = '';
-            saveData();
-            refreshAppIcon();
-            applyAppearance();
-            renderPanelBody();
-            toast('已移除图标图片');
-          }, 'appImage:clear');
-        });
-      }
-
-      /* 隐藏开关 */
-      var hideEl = body.querySelector('#ma-set-hide');
-      if (hideEl) {
-        hideEl.addEventListener('click', function () {
-          safe(function () {
-            DB.settings.hideAll = !DB.settings.hideAll;
-            saveData();
-            hideEl.classList.toggle('on', DB.settings.hideAll);
-            applyVisibility();
-            toast(DB.settings.hideAll ? '入口已隐藏，可通过原生图标或 ?show_audit=true 恢复' : '入口已恢复');
-          }, 'hideToggle');
-        });
-      }
-
-      /* 导出 */
-      var expEl = body.querySelector('#ma-export');
-      if (expEl) {
-        expEl.addEventListener('click', function () {
-          safe(function () {
-            var payload = {
-              __ma_backup: true,
-              exportedAt: Date.now(),
-              data: DB
-            };
-            var str = JSON.stringify(payload, null, 2);
-            var blob = new Blob([str], { type: 'application/json;charset=utf-8' });
-            var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            var d = new Date();
-            a.href = url;
-            a.download = 'audit-backup-' +
-              d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' +
-              pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()) + '.json';
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(function () {
-              try {
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              } catch (e) {}
-            }, 200);
-            toast('已导出备份');
-          }, 'export');
-        });
-      }
-
-      /* 导入 */
-      var impEl = body.querySelector('#ma-import');
-      var impFile = body.querySelector('#ma-import-file');
-      if (impEl && impFile) {
-        impEl.addEventListener('click', function () { impFile.click(); });
-        impFile.addEventListener('change', function () {
-          safe(function () {
-            var f = impFile.files && impFile.files[0];
-            if (!f) return;
-            var fr = new FileReader();
-            fr.onload = function () {
-              safe(function () {
-                var obj = JSON.parse(fr.result);
-                var incoming = obj && obj.__ma_backup ? obj.data : obj;
-                if (!incoming || typeof incoming !== 'object') {
-                  toast('备份文件格式不正确');
-                  return;
-                }
-                confirmModal({
-                  title: '确认导入',
-                  body: '导入将覆盖当前全部数据（字卡库 / 待审核 / 历史 / 外观），是否继续？',
-                  okText: '覆盖导入',
-                  danger: true,
-                  onOk: function () {
-                    safe(function () {
-                      DB = normalizeData(incoming);
-                      saveData();
-                      applyAppearance();
-                      applyFabPosition();
-                      applyVisibility();
-                      refreshAppIcon();
-                      renderTabs();
-                      renderPanelBody();
-                      updateBadge();
-                      toast('导入成功');
-                    }, 'import:apply');
-                  }
-                });
-              }, 'import:parse');
-            };
-            fr.onerror = function () { toast('读取文件失败'); };
-            fr.readAsText(f, 'utf-8');
-          }, 'import:change');
-        });
-      }
-    }, 'bindSettingsEvents');
-  }
-
-  /* ==========================================================================
-   * 通用模态框
-   * ========================================================================== */
-  function confirmModal(opts) {
-    safe(function () {
-      ensureRoot();
-      var mask = document.getElementById('ma-modal-mask');
-      if (!mask) {
-        mask = document.createElement('div');
-        mask.id = 'ma-modal-mask';
-        ROOT.appendChild(mask);
-      }
-      var o = opts || {};
-      mask.innerHTML =
-        '<div class="ma-modal">' +
-          '<div class="ma-modal-title">' + esc(o.title || '提示') + '</div>' +
-          '<div class="ma-modal-body">' + (o.html || esc(o.body || '')) + '</div>' +
-          '<div class="ma-modal-actions">' +
-            '<button class="ma-btn" data-act="cancel">' + esc(o.cancelText || '取消') + '</button>' +
-            '<button class="ma-btn ' + (o.danger ? 'danger' : 'primary') + '" data-act="ok">' +
-              esc(o.okText || '确定') + '</button>' +
-          '</div>' +
-        '</div>';
-      mask.classList.add('on');
-
-      function done(isOk) {
-        try { mask.classList.remove('on'); } catch (e) {}
-        if (isOk && typeof o.onOk === 'function') {
-          safe(o.onOk, 'confirmModal:onOk');
-        } else if (!isOk && typeof o.onCancel === 'function') {
-          safe(o.onCancel, 'confirmModal:onCancel');
-        }
-      }
-
-      mask.onclick = function (e) {
-        if (e.target === mask) { done(false); return; }
-        var btn = e.target.closest ? e.target.closest('[data-act]') : null;
-        if (!btn) return;
-        done(btn.getAttribute('data-act') === 'ok');
-      };
-    }, 'confirmModal');
-  }
-
-  /* ==========================================================================
-   * 模块三：图片裁剪预览器
-   * ========================================================================== */
-  var cropState = null;
-
-  function openCropper(opts) {
-    safe(function () {
-      var fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'image/*';
-      fileInput.style.display = 'none';
-      document.body.appendChild(fileInput);
-
-      fileInput.addEventListener('change', function () {
-        safe(function () {
-          var f = fileInput.files && fileInput.files[0];
-          if (!f) {
-            try { document.body.removeChild(fileInput); } catch (e) {}
-            return;
-          }
-          if (f.size > 12 * 1024 * 1024) {
-            toast('图片过大（>12MB），请换一张');
-            try { document.body.removeChild(fileInput); } catch (e) {}
-            return;
-          }
-          var fr = new FileReader();
-          fr.onload = function () {
-            var img = new Image();
-            img.onload = function () {
-              showCropUI(img, opts);
-              try { document.body.removeChild(fileInput); } catch (e) {}
-            };
-            img.onerror = function () {
-              toast('图片解析失败');
-              try { document.body.removeChild(fileInput); } catch (e) {}
-            };
-            img.src = fr.result;
-          };
-          fr.onerror = function () {
-            toast('读取图片失败');
-            try { document.body.removeChild(fileInput); } catch (e) {}
-          };
-          fr.readAsDataURL(f);
-        }, 'cropper:change');
-      });
-
-      fileInput.click();
-    }, 'openCropper');
-  }
-
-  function showCropUI(img, opts) {
-    safe(function () {
-      ensureRoot();
-      var mask = document.getElementById('ma-crop-mask');
-      if (!mask) {
-        mask = document.createElement('div');
-        mask.id = 'ma-crop-mask';
-        ROOT.appendChild(mask);
-      }
-
-      var o = opts || {};
-      var SIZE = Math.min(240, Math.max(180, (window.innerWidth || 375) - 100));
-      var isCircle = o.shape !== 'square';
-      var radius = isCircle ? '50%' : '18px';
-
-      mask.innerHTML =
-        '<div class="ma-crop-box">' +
-          '<div class="ma-crop-title">' + esc(o.title || '裁剪图片') + '</div>' +
-          '<div class="ma-crop-stage">' +
-            '<div class="ma-crop-canvas-wrap" id="ma-crop-wrap" ' +
-              'style="width:' + SIZE + 'px;height:' + SIZE + 'px;border-radius:' + radius + ';' +
-              'overflow:hidden;box-shadow:0 0 0 9999px rgba(0,0,0,.32),0 0 0 1px rgba(255,255,255,.5);">' +
-              '<canvas class="ma-crop-canvas" id="ma-crop-canvas"></canvas>' +
-            '</div>' +
-          '</div>' +
-          '<div class="ma-crop-hint">拖动图片调整位置</div>' +
-          '<div class="ma-crop-zoom">' +
-            '<span style="font-size:12px;color:#999;white-space:nowrap;">缩放</span>' +
-            '<input type="range" id="ma-crop-zoom" min="1" max="3" step="0.01" value="1">' +
-          '</div>' +
-          '<div class="ma-crop-actions">' +
-            '<button class="ma-btn" id="ma-crop-cancel">取消</button>' +
-            '<button class="ma-btn primary" id="ma-crop-ok">确认</button>' +
-          '</div>' +
-        '</div>';
-
-      var canvas = mask.querySelector('#ma-crop-canvas');
-      var wrap = mask.querySelector('#ma-crop-wrap');
-      var zoomEl = mask.querySelector('#ma-crop-zoom');
-      if (!canvas || !wrap || !zoomEl) return;
-
-      var dpr = Math.min(2, window.devicePixelRatio || 1);
-      canvas.width = Math.round(SIZE * dpr);
-      canvas.height = Math.round(SIZE * dpr);
-      canvas.style.width = SIZE + 'px';
-      canvas.style.height = SIZE + 'px';
-
-      var ctx = canvas.getContext('2d');
-
-      var st = {
-        img: img,
-        size: SIZE,
-        dpr: dpr,
-        ctx: ctx,
-        baseScale: Math.max(SIZE / img.width, SIZE / img.height),
-        zoom: 1,
-        ox: 0,
-        oy: 0
-      };
-      cropState = st;
-
-      function clampOffset() {
-        var s = st.baseScale * st.zoom;
-        var w = st.img.width * s;
-        var h = st.img.height * s;
-        var mx = Math.max(0, (w - st.size) / 2);
-        var my = Math.max(0, (h - st.size) / 2);
-        st.ox = Math.max(-mx, Math.min(mx, st.ox));
-        st.oy = Math.max(-my, Math.min(my, st.oy));
-      }
-
-      function draw() {
-        safe(function () {
-          clampOffset();
-          var s = st.baseScale * st.zoom;
-          var size = st.size;
-          ctx.setTransform(st.dpr, 0, 0, st.dpr, 0, 0);
-          ctx.clearRect(0, 0, size, size);
-          ctx.save();
-          ctx.translate(size / 2 + st.ox, size / 2 + st.oy);
-          ctx.scale(s, s);
-          ctx.drawImage(st.img, -st.img.width / 2, -st.img.height / 2);
-          ctx.restore();
-        }, 'crop:draw');
-      }
-
-      draw();
-      mask.classList.add('on');
-
-      /* 拖拽 */
-      var dragging = false, lastX = 0, lastY = 0;
-
-      function onDown(e) {
-        try {
-          dragging = true;
-          lastX = e.clientX;
-          lastY = e.clientY;
-          if (wrap.setPointerCapture && e.pointerId != null) {
-            try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
-          }
-          e.preventDefault();
-        } catch (err) {}
-      }
-      function onMove(e) {
-        try {
-          if (!dragging) return;
-          st.ox += (e.clientX - lastX);
-          st.oy += (e.clientY - lastY);
-          lastX = e.clientX;
-          lastY = e.clientY;
-          draw();
-          e.preventDefault();
-        } catch (err) {}
-      }
-      function onUp() { dragging = false; }
-
-      if (window.PointerEvent) {
-        wrap.addEventListener('pointerdown', onDown);
-        wrap.addEventListener('pointermove', onMove);
-        wrap.addEventListener('pointerup', onUp);
-        wrap.addEventListener('pointercancel', onUp);
-      } else {
-        wrap.addEventListener('mousedown', function (e) {
-          onDown(e);
-          function mm(ev) { onMove(ev); }
-          function mu() {
-            onUp();
-            document.removeEventListener('mousemove', mm);
-            document.removeEventListener('mouseup', mu);
-          }
-          document.addEventListener('mousemove', mm);
-          document.addEventListener('mouseup', mu);
-        });
-        wrap.addEventListener('touchstart', function (e) {
-          var t = e.touches[0];
-          onDown({ clientX: t.clientX, clientY: t.clientY, preventDefault: function () { e.preventDefault(); } });
-        }, { passive: false });
-        wrap.addEventListener('touchmove', function (e) {
-          var t = e.touches[0];
-          onMove({ clientX: t.clientX, clientY: t.clientY, preventDefault: function () { e.preventDefault(); } });
-        }, { passive: false });
-        wrap.addEventListener('touchend', onUp);
-      }
-
-      /* 缩放 */
-      zoomEl.addEventListener('input', function () {
-        safe(function () {
-          st.zoom = clamp(parseFloat(zoomEl.value) || 1, 1, 3);
-          draw();
-        }, 'crop:zoom');
-      });
-
-      /* 取消 */
-      var cancelBtn = mask.querySelector('#ma-crop-cancel');
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', function () {
-          safe(function () {
-            mask.classList.remove('on');
-            cropState = null;
-            if (typeof o.onCancel === 'function') o.onCancel();
-          }, 'crop:cancel');
-        });
-      }
-
-      /* 确认 */
-      var okBtn = mask.querySelector('#ma-crop-ok');
-      if (okBtn) {
-        okBtn.addEventListener('click', function () {
-          safe(function () {
-            var OUT = 256;
-            var k = OUT / st.size;
-            var s = st.baseScale * st.zoom;
-
-            var oc = document.createElement('canvas');
-            oc.width = OUT;
-            oc.height = OUT;
-            var octx = oc.getContext('2d');
-            octx.save();
-            octx.translate(OUT / 2 + st.ox * k, OUT / 2 + st.oy * k);
-            octx.scale(s * k, s * k);
-            octx.drawImage(st.img, -st.img.width / 2, -st.img.height / 2);
-            octx.restore();
-
-            var dataURL = '';
-            try {
-              dataURL = oc.toDataURL('image/webp', 0.92);
-              if (dataURL.indexOf('data:image/webp') !== 0) {
-                dataURL = oc.toDataURL('image/png');
-              }
-            } catch (e) {
-              try { dataURL = oc.toDataURL('image/png'); } catch (e2) { dataURL = ''; }
-            }
-
-            mask.classList.remove('on');
-            cropState = null;
-
-            if (!dataURL) {
-              toast('生成图片失败，请重试');
-              return;
-            }
-            if (typeof o.onConfirm === 'function') o.onConfirm(dataURL);
-          }, 'crop:ok');
-        });
-      }
-
-      /* 点击遮罩空白关闭 */
-      mask.addEventListener('click', function (e) {
-        if (e.target === mask) {
-          safe(function () {
-            mask.classList.remove('on');
-            cropState = null;
-          }, 'crop:maskClose');
-        }
-      });
-    }, 'showCropUI');
-  }
-
-  /* ==========================================================================
-   * 窗口尺寸变化：重算悬浮球边界
-   * ========================================================================== */
-  function bindResize() {
-    safe(function () {
-      if (window.__maResizeBound) return;
-      window.__maResizeBound = true;
-      window.addEventListener('resize', function () {
-        safe(function () {
-          if (!FAB) return;
-          var size = FAB.offsetWidth || DB.settings.ballSize || 52;
-          var x = parseFloat(FAB.style.left) || 0;
-          var y = parseFloat(FAB.style.top) || 0;
-          x = clamp(x, 4, Math.max(4, window.innerWidth - size - 4));
-          y = clamp(y, 4, Math.max(4, window.innerHeight - size - 4));
-          FAB.style.left = x + 'px';
-          FAB.style.top = y + 'px';
-        }, 'resize');
-      });
-    }, 'bindResize');
-  }
-  /* ==========================================================================
-   * 第 3 部分：模块四（字卡库深度管理）+ 模块五（审批 + 历史）+ 发送按钮入口
-   * ========================================================================== */
-
-  /* --------------------------- 共用辅助 --------------------------- */
-  function actionLabel(action) {
-    var m = { add: '新增', delete: '删除', disable: '禁用', enable: '启用', move: '迁移' };
-    return m[action] || action;
-  }
-  function actionClass(action) {
-    var m = { add: 'add', delete: 'del', disable: 'dis', enable: 'en', move: 'mv' };
-    return m[action] || '';
-  }
-  function arrFindIndex(arr, fn) {
-    try {
-      for (var i = 0; i < arr.length; i++) { if (fn(arr[i], i)) return i; }
-    } catch (e) {}
-    return -1;
-  }
-  function eachNode(container, sel, fn) {
-    try {
-      var nodes = container.querySelectorAll(sel);
-      for (var i = 0; i < nodes.length; i++) fn(nodes[i], i);
-    } catch (e) {}
-  }
-
-  /* ==========================================================================
-   * 模块五：待审核面板
-   * ========================================================================== */
+  /* 模块五：审批执行 */
   function renderPendingTab() {
     var pending = [];
-    for (var pi = 0; pi < DB.pending.length; pi++) {
-      var p0 = DB.pending[pi];
-      if (p0 && p0.status === 'pending') pending.push(p0);
-    }
-    if (!pending.length) {
-      return '<div class="ma-empty">暂无待审核记录<br><span style="font-size:11px;">梦角引擎每 30 分钟巡一次</span></div>';
-    }
+    for (var pi = 0; pi < DB.pending.length; pi++) { if (DB.pending[pi].status === 'pending') pending.push(DB.pending[pi]); }
+    if (!pending.length) return '<div class="ma-empty">暂无待审核记录</div>';
     pending.sort(function (a, b) { return (b.time || 0) - (a.time || 0); });
-
-    var h = '';
+    var h = '', actM = { add: '新增', delete: '删除', disable: '禁用', enable: '启用', move: '迁移' }, clsM = { add: 'add', delete: 'del', disable: 'dis', enable: 'en', move: 'mv' };
     for (var i = 0; i < pending.length; i++) {
       var p = pending[i];
       h += '<div class="ma-pending-item" data-pid="' + esc(p.id) + '">';
-
-      h += '<div class="ma-pending-top">';
-      h += '<span class="ma-act-tag ' + actionClass(p.action) + '">' + esc(actionLabel(p.action)) + '</span>';
-      h += '<span class="ma-sender">来自 <b>' + esc(p.sender) + '</b> · ' + esc(fmtRelative(p.time)) + '</span>';
-      h += '</div>';
-
+      h += '<div class="ma-pending-top"><span class="ma-act-tag ' + (clsM[p.action] || '') + '">' + (actM[p.action] || p.action) + '</span><span class="ma-sender">来自 <b>' + esc(p.sender) + '</b> · ' + esc(fmtRelative(p.time)) + '</span></div>';
       h += '<div class="ma-pending-text">' + esc(p.text) + '</div>';
-
       if (p.note) h += '<div class="ma-pending-note">' + esc(p.note) + '</div>';
-
-      /* -------- add：目标分类选择 -------- */
       if (p.action === 'add') {
-        h += '<div class="ma-row" style="margin:4px 0 6px;">';
-        h += '<span class="ma-label" style="white-space:nowrap;">存入分类：</span>';
-        h += '<select class="ma-select" data-sel-group style="flex:1;min-width:100px;">';
-        if (!DB.groups.length) {
-          h += '<option value="">（将自动创建"默认"分类）</option>';
-        } else {
-          for (var gi = 0; gi < DB.groups.length; gi++) {
-            var g = DB.groups[gi];
-            var sel = (g.id === p.toGroupId) ? ' selected' : '';
-            h += '<option value="' + esc(g.id) + '"' + sel + '>' + esc(g.name) + '</option>';
-          }
-        }
-        h += '</select>';
-        h += '</div>';
+        h += '<div class="ma-row" style="margin:4px 0 6px;"><span class="ma-label">存入分类：</span><select class="ma-select" data-sel-group style="flex:1;">';
+        if (!DB.groups.length) h += '<option value="">(自动创建默认分类)</option>';
+        else { for (var gi = 0; gi < DB.groups.length; gi++) h += '<option value="' + esc(DB.groups[gi].id) + '"' + (DB.groups[gi].id === p.toGroupId ? ' selected' : '') + '>' + esc(DB.groups[gi].name) + '</option>'; }
+        h += '</select></div>';
       }
-
-      /* -------- move：显示迁移方向 -------- */
-      if (p.action === 'move') {
-        h += '<div style="font-size:12px;color:#888;margin:2px 0 6px;">';
-        h += '迁移：<b>' + esc(p.fromGroupName || '?') + '</b> → <b>' + esc(p.toGroupName || '?') + '</b>';
-        h += '</div>';
-      }
-
-      /* -------- 其余动作：显示原位置 -------- */
-      if ((p.action === 'delete' || p.action === 'disable' || p.action === 'enable') && p.fromGroupName) {
-        h += '<div style="font-size:12px;color:#888;margin:2px 0 6px;">';
-        h += '原位置：' + esc(p.fromGroupName);
-        h += '</div>';
-      }
-
-      h += '<div class="ma-pending-actions">';
-      h += '<button class="ma-btn sm" data-pact="reject">拒绝</button>';
-      h += '<button class="ma-btn sm primary" data-pact="approve">同意</button>';
-      h += '</div>';
-
-      h += '</div>';
+      if (p.action === 'move') h += '<div style="font-size:12px;color:#888;margin:2px 0 6px;">迁移：<b>' + esc(p.fromGroupName) + '</b> → <b>' + esc(p.toGroupName) + '</b></div>';
+      h += '<div class="ma-pending-actions"><button class="ma-btn sm" data-pact="reject">拒绝</button><button class="ma-btn sm primary" data-pact="approve">同意</button></div></div>';
     }
     return h;
   }
 
   function bindPendingEvents(body) {
     safe(function () {
-      if (!body) return;
       eachNode(body, '.ma-pending-item', function (item) {
-        var pid = item.getAttribute('data-pid');
-        var p = null;
-        for (var i = 0; i < DB.pending.length; i++) {
-          if (DB.pending[i].id === pid) { p = DB.pending[i]; break; }
-        }
+        var pid = item.getAttribute('data-pid'), p = null;
+        for (var i = 0; i < DB.pending.length; i++) if (DB.pending[i].id === pid) { p = DB.pending[i]; break; }
         if (!p) return;
-
-        var approveBtn = item.querySelector('[data-pact="approve"]');
-        var rejectBtn = item.querySelector('[data-pact="reject"]');
-
-        if (approveBtn) {
-          approveBtn.addEventListener('click', function () {
-            safe(function () {
-              var sel = item.querySelector('[data-sel-group]');
-              var targetGid = sel ? sel.value : '';
-              var ok = approvePending(p, targetGid);
-              if (ok) {
-                DB.pending = DB.pending.filter(function (x) { return x.id !== p.id; });
-                saveData();
-                renderPanelBody();
-                updateBadge();
-                toast('已同意并入库');
-              } else {
-                toast('操作失败：目标不存在或数据异常');
-              }
-            }, 'pending:approve');
-          });
-        }
-
-        if (rejectBtn) {
-          rejectBtn.addEventListener('click', function () {
-            safe(function () {
-              rejectPending(p);
+        var appBtn = item.querySelector('[data-pact="approve"]'), rejBtn = item.querySelector('[data-pact="reject"]');
+        if (appBtn) appBtn.addEventListener('click', function () {
+          safe(function () {
+            var sel = item.querySelector('[data-sel-group]');
+            if (approvePending(p, sel ? sel.value : '')) {
               DB.pending = DB.pending.filter(function (x) { return x.id !== p.id; });
-              saveData();
-              renderPanelBody();
-              updateBadge();
-              toast('已拒绝');
-            }, 'pending:reject');
-          });
-        }
+              saveData(); renderPanelBody(); updateBadge(); toast('已同意并入库');
+            } else toast('操作失败');
+          }, 'approve');
+        });
+        if (rejBtn) rejBtn.addEventListener('click', function () {
+          safe(function () {
+            rejectPending(p);
+            DB.pending = DB.pending.filter(function (x) { return x.id !== p.id; });
+            saveData(); renderPanelBody(); updateBadge(); toast('已拒绝');
+          }, 'reject');
+        });
       });
     }, 'bindPendingEvents');
   }
 
-  /* ---------- 审批执行 ---------- */
   function approvePending(p, targetGid) {
     if (!p) return false;
     var ok = false;
-
     if (p.action === 'add') {
       var g = targetGid ? findGroup(targetGid) : null;
-      if (!g) {
-        if (!DB.groups.length) {
-          g = { id: uid('g'), name: '默认', disabledBy: [], cards: [] };
-          DB.groups.push(g);
-        } else {
-          g = DB.groups[0];
-        }
-      }
-      g.cards.push({
-        id: uid('c'),
-        text: p.text,
-        disabledBy: [],
-        createdAt: Date.now()
-      });
-      ok = true;
-
+      if (!g) { if (!DB.groups.length) { g = { id: uid('g'), name: '默认', disabledBy: [], cards: [] }; DB.groups.push(g); } else g = DB.groups[0]; }
+      g.cards.push({ id: uid('c'), text: p.text, disabledBy: [], createdAt: Date.now() }); ok = true;
     } else if (p.action === 'delete') {
-      var f1 = findCard(p.cardId);
-      if (f1) {
-        f1.group.cards = f1.group.cards.filter(function (x) { return x.id !== f1.card.id; });
-        ok = true;
-      }
-
+      var f1 = findCard(p.cardId); if (f1) { f1.group.cards = f1.group.cards.filter(function (x) { return x.id !== f1.card.id; }); ok = true; }
     } else if (p.action === 'disable') {
-      var f2 = findCard(p.cardId);
-      if (f2) {
-        if (f2.card.disabledBy.indexOf('mj') < 0) f2.card.disabledBy.push('mj');
-        ok = true;
-      }
-
+      var f2 = findCard(p.cardId); if (f2) { if (f2.card.disabledBy.indexOf('mj') < 0) f2.card.disabledBy.push('mj'); ok = true; }
     } else if (p.action === 'enable') {
-      var f3 = findCard(p.cardId);
-      if (f3) {
-        f3.card.disabledBy = f3.card.disabledBy.filter(function (x) { return x !== 'mj'; });
-        ok = true;
-      }
-
+      var f3 = findCard(p.cardId); if (f3) { f3.card.disabledBy = f3.card.disabledBy.filter(function (x) { return x !== 'mj'; }); ok = true; }
     } else if (p.action === 'move') {
-      var f4 = findCard(p.cardId);
-      var target = findGroup(p.toGroupId);
-      if (f4 && target) {
-        f4.group.cards = f4.group.cards.filter(function (x) { return x.id !== f4.card.id; });
-        target.cards.push(f4.card);
-        ok = true;
-      }
+      var f4 = findCard(p.cardId), tgt = findGroup(p.toGroupId);
+      if (f4 && tgt) { f4.group.cards = f4.group.cards.filter(function (x) { return x.id !== f4.card.id; }); tgt.cards.push(f4.card); ok = true; }
     }
-
-    if (ok) {
-      pushHistory({
-        sender: p.sender,
-        action: p.action,
-        text: p.text,
-        result: 'agree',
-        extra: p.note || ''
-      });
-    }
+    if (ok) pushHistory({ sender: p.sender, action: p.action, text: p.text, result: 'agree', extra: p.note || '' });
     return ok;
   }
+  function rejectPending(p) { if (p) pushHistory({ sender: p.sender, action: p.action, text: p.text, result: 'reject', extra: p.note || '' }); }
 
-  function rejectPending(p) {
-    if (!p) return false;
-    pushHistory({
-      sender: p.sender,
-      action: p.action,
-      text: p.text,
-      result: 'reject',
-      extra: p.note || ''
-    });
-    return true;
-  }
-
-  /* ==========================================================================
-   * 模块五：历史档案
-   * ========================================================================== */
   function renderHistoryTab() {
-    if (!DB.history.length) {
-      return '<div class="ma-empty">暂无历史记录</div>';
-    }
-    var arr = DB.history.slice().reverse();
-
-    var h = '';
-    h += '<div style="font-size:11px;color:#aaa;margin-bottom:10px;">';
-    h += '最多保留 ' + HISTORY_LIMIT + ' 条，当前 ' + DB.history.length + ' 条';
-    h += '</div>';
-
+    if (!DB.history.length) return '<div class="ma-empty">暂无历史记录</div>';
+    var arr = DB.history.slice().reverse(), h = '';
+    var actM = { add: '新增', delete: '删除', disable: '禁用', enable: '启用', move: '迁移' }, clsM = { add: 'add', delete: 'del', disable: 'dis', enable: 'en', move: 'mv' };
+    h += '<div style="font-size:11px;color:#aaa;margin-bottom:10px;">最多保留 ' + HISTORY_LIMIT + ' 条，当前 ' + DB.history.length + ' 条</div>';
     for (var i = 0; i < arr.length; i++) {
       var it = arr[i];
-      h += '<div class="ma-history-item">';
-      h += '<div class="ma-history-main">';
-      h += '<div class="ma-history-text">';
-      h += '<span class="ma-act-tag ' + actionClass(it.action) + '" style="margin-right:6px;">' + esc(actionLabel(it.action)) + '</span>';
-      h += esc(it.text);
-      h += '</div>';
-      h += '<div class="ma-history-meta">' + esc(it.sender) + ' · ' + esc(fmtTime(it.time)) + '</div>';
-      h += '</div>';
-      h += '<span class="ma-res ' + (it.result === 'agree' ? 'agree' : 'reject') + '">' +
-           (it.result === 'agree' ? '已同意' : '已拒绝') + '</span>';
-      h += '</div>';
+      h += '<div class="ma-history-item"><div class="ma-history-main"><div class="ma-history-text"><span class="ma-act-tag ' + (clsM[it.action] || '') + '" style="margin-right:6px;">' + (actM[it.action] || it.action) + '</span>' + esc(it.text) + '</div><div class="ma-history-meta">' + esc(it.sender) + ' · ' + esc(fmtTime(it.time)) + '</div></div><span class="ma-res ' + (it.result === 'agree' ? 'agree' : 'reject') + '">' + (it.result === 'agree' ? '已同意' : '已拒绝') + '</span></div>';
     }
     return h;
   }
 
-  function bindHistoryEvents(body) {
-    /* 历史档案只读，无需绑定 */
-  }
-
-  /* ==========================================================================
-   * 模块四：字卡库
-   * ========================================================================== */
-  var OPEN_GROUPS = null;   // null = 未初始化，初始化后默认全展开
-
   function ensureOpenGroupsState() {
-    if (OPEN_GROUPS === null) {
-      OPEN_GROUPS = {};
-      for (var i = 0; i < DB.groups.length; i++) OPEN_GROUPS[DB.groups[i].id] = true;
-    }
+    if (OPEN_GROUPS === null) { OPEN_GROUPS = {}; for (var i = 0; i < DB.groups.length; i++) OPEN_GROUPS[DB.groups[i].id] = true; }
   }
 
   function renderCardsTab() {
     ensureOpenGroupsState();
-    var h = '';
-
-    /* ---------- 批量操作栏 ---------- */
-    h += '<div class="ma-bulkbar">';
-    h += '<label style="display:flex;align-items:center;gap:4px;cursor:pointer;">';
-    h += '<input type="checkbox" id="ma-sel-all"> 全选';
-    h += '</label>';
-    h += '<span id="ma-sel-count" style="color:#888;">已选 0 个</span>';
-    h += '<button class="ma-btn sm danger" id="ma-bulk-del">批量删除</button>';
-    h += '<select class="ma-select" id="ma-bulk-target" style="width:auto;flex:1;min-width:80px;">';
-    h += '<option value="">转移目标…</option>';
-    for (var gi = 0; gi < DB.groups.length; gi++) {
-      h += '<option value="' + esc(DB.groups[gi].id) + '">' + esc(DB.groups[gi].name) + '</option>';
-    }
-    h += '</select>';
-    h += '<button class="ma-btn sm" id="ma-bulk-move">转移</button>';
-    h += '</div>';
-
-    /* ---------- 新建分类 ---------- */
-    h += '<div class="ma-row">';
-    h += '<input type="text" class="ma-input" id="ma-new-group-name" placeholder="新分类名称…" maxlength="20" style="flex:1;">';
-    h += '<button class="ma-btn primary" id="ma-new-group">+ 新建分类</button>';
-    h += '</div>';
-
-    /* ---------- 分类列表 ---------- */
-    if (!DB.groups.length) {
-      h += '<div class="ma-empty">暂无分类，先创建一个吧</div>';
-      return h;
-    }
-
+    var h = '<div class="ma-bulkbar"><label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="ma-sel-all"> 全选</label><span id="ma-sel-count" style="color:#888;">已选 0 个</span><button class="ma-btn sm danger" id="ma-bulk-del">批量删除</button><select class="ma-select" id="ma-bulk-target" style="width:auto;flex:1;min-width:80px;"><option value="">转移目标…</option>';
+    for (var gi = 0; gi < DB.groups.length; gi++) h += '<option value="' + esc(DB.groups[gi].id) + '">' + esc(DB.groups[gi].name) + '</option>';
+    h += '</select><button class="ma-btn sm" id="ma-bulk-move">转移</button></div>';
+    h += '<div class="ma-row"><input type="text" class="ma-input" id="ma-new-group-name" placeholder="新分类名称…" maxlength="20" style="flex:1;"><button class="ma-btn primary" id="ma-new-group">+ 新建分类</button></div>';
+    if (!DB.groups.length) return h + '<div class="ma-empty">暂无分类</div>';
     for (var i = 0; i < DB.groups.length; i++) {
-      var g = DB.groups[i];
-      var gDis = (g.disabledBy || []).length > 0;
-      var isOpen = OPEN_GROUPS[g.id] !== false;
-
-      h += '<div class="ma-group' + (isOpen ? ' open' : '') + '" data-gid="' + esc(g.id) + '">';
-
-      /* 分组头 */
-      h += '<div class="ma-group-head">';
-      h += '<div class="ma-group-title">';
-      h += '<span class="ma-arrow">▶</span>';
-      h += '<span class="name">' + esc(g.name) + '</span>';
-      h += '<span class="ma-group-cnt">(' + g.cards.length + ')</span>';
-      if (gDis) {
-        h += '<span class="ma-badge-dis user" style="font-size:10px;">分组已禁用</span>';
-      }
-      h += '</div>';
-      h += '<div class="ma-group-tools" style="flex-wrap:wrap;justify-content:flex-end;">';
-      h += '<button class="ma-btn sm" data-gact="rename" data-gid="' + esc(g.id) + '">重命名</button>';
-      h += '<button class="ma-btn sm" data-gact="up" data-gid="' + esc(g.id) + '" title="上移">↑</button>';
-      h += '<button class="ma-btn sm" data-gact="down" data-gid="' + esc(g.id) + '" title="下移">↓</button>';
-      h += '<button class="ma-btn sm" data-gact="toggle" data-gid="' + esc(g.id) + '">' + (gDis ? '启用' : '禁用') + '</button>';
-      h += '<button class="ma-btn sm danger" data-gact="delete" data-gid="' + esc(g.id) + '">删除</button>';
-      h += '</div>';
-      h += '</div>';
-
-      /* 分组体 */
-      h += '<div class="ma-group-body">';
-      if (!g.cards.length) {
-        h += '<div class="ma-empty" style="padding:18px 10px;">该分类暂无字卡</div>';
-      } else {
+      var g = DB.groups[i], gDis = (g.disabledBy || []).length > 0, isOpen = OPEN_GROUPS[g.id] !== false;
+      h += '<div class="ma-group' + (isOpen ? ' open' : '') + '" data-gid="' + esc(g.id) + '"><div class="ma-group-head"><div class="ma-group-title"><span class="ma-arrow">▶</span><span class="name">' + esc(g.name) + '</span><span class="ma-group-cnt">(' + g.cards.length + ')</span>' + (gDis ? '<span class="ma-badge-dis user" style="font-size:10px;">分组已禁用</span>' : '') + '</div><div class="ma-group-tools" style="flex-wrap:wrap;justify-content:flex-end;">';
+      h += '<button class="ma-btn sm" data-gact="rename" data-gid="' + esc(g.id) + '">重命名</button><button class="ma-btn sm" data-gact="up" data-gid="' + esc(g.id) + '">↑</button><button class="ma-btn sm" data-gact="down" data-gid="' + esc(g.id) + '">↓</button><button class="ma-btn sm" data-gact="toggle" data-gid="' + esc(g.id) + '">' + (gDis ? '启用' : '禁用') + '</button><button class="ma-btn sm danger" data-gact="delete" data-gid="' + esc(g.id) + '">删除</button></div></div><div class="ma-group-body">';
+      if (!g.cards.length) h += '<div class="ma-empty" style="padding:18px 10px;">该分类暂无字卡</div>';
+      else {
         for (var j = 0; j < g.cards.length; j++) {
-          var c = g.cards[j];
-          var cDisArr = c.disabledBy || [];
-          var effectiveDis = gDis || cDisArr.length > 0;
-
-          h += '<div class="ma-card' + (effectiveDis ? ' disabled' : '') + '" data-cid="' + esc(c.id) + '">';
-          h += '<input type="checkbox" class="ma-card-check" data-cid="' + esc(c.id) + '">';
-          h += '<div class="ma-card-main">';
-          h += '<div class="ma-card-text">' + esc(c.text) + '</div>';
-
-          /* 状态徽标 */
+          var c = g.cards[j], cDisArr = c.disabledBy || [], effectiveDis = gDis || cDisArr.length > 0;
+          h += '<div class="ma-card' + (effectiveDis ? ' disabled' : '') + '" data-cid="' + esc(c.id) + '"><input type="checkbox" class="ma-card-check" data-cid="' + esc(c.id) + '"><div class="ma-card-main"><div class="ma-card-text">' + esc(c.text) + '</div>';
           if (cDisArr.length) {
-            var badgeCls, badgeTxt;
-            if (cDisArr.length >= 2) { badgeCls = 'both'; badgeTxt = '双方禁用'; }
-            else if (cDisArr.indexOf('user') >= 0) { badgeCls = 'user'; badgeTxt = '单方禁用·我'; }
-            else { badgeCls = 'mj'; badgeTxt = '单方禁用·梦角'; }
-            h += '<div class="ma-card-meta"><span class="ma-badge-dis ' + badgeCls + '">' + badgeTxt + '</span></div>';
-          } else if (gDis) {
-            h += '<div class="ma-card-meta"><span class="ma-badge-dis user" style="font-size:10px;">随分组禁用</span></div>';
-          }
-          h += '</div>';
-
-          /* 卡片操作 */
-          h += '<div class="ma-card-ops">';
-          h += '<button class="ma-btn sm" data-cact="edit" data-cid="' + esc(c.id) + '">编辑</button>';
-          h += '<button class="ma-btn sm" data-cact="send" data-cid="' + esc(c.id) + '">发送</button>';
-          h += '<button class="ma-btn sm" data-cact="toggle" data-cid="' + esc(c.id) + '">' + (cDisArr.length ? '启用' : '禁用') + '</button>';
-          h += '<button class="ma-btn sm danger" data-cact="delete" data-cid="' + esc(c.id) + '">删除</button>';
-          h += '</div>';
-          h += '</div>';
+            var bCls = cDisArr.length >= 2 ? 'both' : (cDisArr.indexOf('user') >= 0 ? 'user' : 'mj');
+            var bTxt = cDisArr.length >= 2 ? '双方禁用' : (cDisArr.indexOf('user') >= 0 ? '单方禁用·我' : '单方禁用·梦角');
+            h += '<div class="ma-card-meta"><span class="ma-badge-dis ' + bCls + '">' + bTxt + '</span></div>';
+          } else if (gDis) h += '<div class="ma-card-meta"><span class="ma-badge-dis user" style="font-size:10px;">随分组禁用</span></div>';
+          h += '</div><div class="ma-card-ops"><button class="ma-btn sm" data-cact="edit" data-cid="' + esc(c.id) + '">编辑</button><button class="ma-btn sm" data-cact="send" data-cid="' + esc(c.id) + '">发送</button><button class="ma-btn sm" data-cact="toggle" data-cid="' + esc(c.id) + '">' + (cDisArr.length ? '启用' : '禁用') + '</button><button class="ma-btn sm danger" data-cact="delete" data-cid="' + esc(c.id) + '">删除</button></div></div>';
         }
       }
       h += '</div></div>';
     }
-
     return h;
   }
 
   function bindCardsEvents(body) {
     safe(function () {
-      if (!body) return;
-
-      /* ---------- 新建分类 ---------- */
-      var newBtn = body.querySelector('#ma-new-group');
-      var newInput = body.querySelector('#ma-new-group-name');
+      var newBtn = body.querySelector('#ma-new-group'), newInput = body.querySelector('#ma-new-group-name');
       if (newBtn && newInput) {
         newBtn.addEventListener('click', function () {
           safe(function () {
-            var name = String(newInput.value || '').trim();
-            if (!name) { toast('请输入分类名称'); return; }
-            DB.groups.push({ id: uid('g'), name: name, disabledBy: [], cards: [] });
+            var n = String(newInput.value || '').trim(); if (!n) { toast('请输入名称'); return; }
+            DB.groups.push({ id: uid('g'), name: n, disabledBy: [], cards: [] });
             if (OPEN_GROUPS) OPEN_GROUPS[DB.groups[DB.groups.length - 1].id] = true;
-            saveData();
-            renderPanelBody();
-            toast('已创建分类');
+            saveData(); renderPanelBody(); toast('已创建');
           }, 'newGroup');
         });
-        newInput.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter') { try { newBtn.click(); } catch (err) {} }
-        });
+        newInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { try { newBtn.click(); } catch (err) {} } });
       }
-
-      /* ---------- 分组操作按钮 ---------- */
       eachNode(body, '[data-gact]', function (btn) {
         btn.addEventListener('click', function (e) {
           try { e.stopPropagation(); } catch (err) {}
-          var act = btn.getAttribute('data-gact');
-          var gid = btn.getAttribute('data-gid');
-          safe(function () { handleGroupAction(act, gid); }, 'groupAction:' + act);
+          safe(function () { handleGroupAction(btn.getAttribute('data-gact'), btn.getAttribute('data-gid')); }, 'groupAct');
         });
       });
-
-      /* ---------- 分组展开/折叠 ---------- */
       eachNode(body, '.ma-group-head', function (head) {
         head.addEventListener('click', function (e) {
           try {
             if (e.target.closest && e.target.closest('[data-gact]')) return;
-            var grp = head.parentNode;
-            var gid = grp.getAttribute('data-gid');
-            var isOpen = grp.classList.toggle('open');
-            if (OPEN_GROUPS) OPEN_GROUPS[gid] = isOpen;
+            var grp = head.parentNode, gid = grp.getAttribute('data-gid');
+            var isOpen = grp.classList.toggle('open'); if (OPEN_GROUPS) OPEN_GROUPS[gid] = isOpen;
           } catch (err) {}
         });
       });
-
-      /* ---------- 单卡操作 ---------- */
       eachNode(body, '[data-cact]', function (btn) {
         btn.addEventListener('click', function (e) {
           try { e.stopPropagation(); } catch (err) {}
-          var act = btn.getAttribute('data-cact');
-          var cid = btn.getAttribute('data-cid');
-          safe(function () { handleCardAction(act, cid); }, 'cardAction:' + act);
+          safe(function () { handleCardAction(btn.getAttribute('data-cact'), btn.getAttribute('data-cid')); }, 'cardAct');
         });
       });
-
-      /* ---------- 全选 ---------- */
-      function updateBulkCount() {
+      function updCount() {
         var n = 0, total = 0;
-        eachNode(body, '.ma-card-check', function (cb) {
-          total++;
-          if (cb.checked) n++;
-        });
-        var el = body.querySelector('#ma-sel-count');
-        if (el) el.textContent = '已选 ' + n + ' 个';
-        var all = body.querySelector('#ma-sel-all');
-        if (all) all.checked = (n > 0 && n === total);
+        eachNode(body, '.ma-card-check', function (cb) { total++; if (cb.checked) n++; });
+        var el = body.querySelector('#ma-sel-count'); if (el) el.textContent = '已选 ' + n + ' 个';
+        var all = body.querySelector('#ma-sel-all'); if (all) all.checked = (n > 0 && n === total);
       }
-
       var selAll = body.querySelector('#ma-sel-all');
-      if (selAll) {
-        selAll.addEventListener('change', function () {
-          var checked = selAll.checked;
-          eachNode(body, '.ma-card-check', function (cb) { cb.checked = checked; });
-          updateBulkCount();
-        });
-      }
-      eachNode(body, '.ma-card-check', function (cb) {
-        cb.addEventListener('change', updateBulkCount);
-      });
-
-      /* ---------- 批量删除 ---------- */
+      if (selAll) selAll.addEventListener('change', function () { eachNode(body, '.ma-card-check', function (cb) { cb.checked = selAll.checked; }); updCount(); });
+      eachNode(body, '.ma-card-check', function (cb) { cb.addEventListener('change', updCount); });
       var bulkDel = body.querySelector('#ma-bulk-del');
-      if (bulkDel) {
-        bulkDel.addEventListener('click', function () {
-          safe(function () {
-            var cids = [];
-            eachNode(body, '.ma-card-check', function (cb) {
-              if (cb.checked) cids.push(cb.getAttribute('data-cid'));
-            });
-            if (!cids.length) { toast('请先勾选字卡'); return; }
-            confirmModal({
-              title: '批量删除',
-              body: '确定删除选中的 ' + cids.length + ' 张字卡？此操作不可撤销。',
-              danger: true,
-              okText: '删除',
-              onOk: function () {
-                safe(function () {
-                  for (var i = 0; i < cids.length; i++) {
-                    var f = findCard(cids[i]);
-                    if (f) {
-                      f.group.cards = f.group.cards.filter(function (x) { return x.id !== f.card.id; });
-                    }
-                  }
-                  saveData();
-                  renderPanelBody();
-                  toast('已删除 ' + cids.length + ' 张');
-                }, 'bulkDel:apply');
-              }
-            });
-          }, 'bulkDel');
-        });
-      }
-
-      /* ---------- 批量转移 ---------- */
-      var bulkMove = body.querySelector('#ma-bulk-move');
-      var bulkTarget = body.querySelector('#ma-bulk-target');
-      if (bulkMove && bulkTarget) {
-        bulkMove.addEventListener('click', function () {
-          safe(function () {
-            var tid = bulkTarget.value;
-            if (!tid) { toast('请选择目标分类'); return; }
-            var target = findGroup(tid);
-            if (!target) { toast('目标分类不存在'); return; }
-            var cids = [];
-            eachNode(body, '.ma-card-check', function (cb) {
-              if (cb.checked) cids.push(cb.getAttribute('data-cid'));
-            });
-            if (!cids.length) { toast('请先勾选字卡'); return; }
-
-            var moved = 0;
-            for (var i = 0; i < cids.length; i++) {
-              var f = findCard(cids[i]);
-              if (f && f.group.id !== tid) {
-                f.group.cards = f.group.cards.filter(function (x) { return x.id !== f.card.id; });
-                target.cards.push(f.card);
-                moved++;
-              }
+      if (bulkDel) bulkDel.addEventListener('click', function () {
+        safe(function () {
+          var cids = []; eachNode(body, '.ma-card-check', function (cb) { if (cb.checked) cids.push(cb.getAttribute('data-cid')); });
+          if (!cids.length) { toast('请先勾选'); return; }
+          confirmModal({
+            title: '批量删除', body: '确定删除选中的 ' + cids.length + ' 张字卡？', danger: true, okText: '删除',
+            onOk: function () {
+              safe(function () {
+                for (var i = 0; i < cids.length; i++) { var f = findCard(cids[i]); if (f) f.group.cards = f.group.cards.filter(function (x) { return x.id !== f.card.id; }); }
+                saveData(); renderPanelBody(); toast('已删除');
+              }, 'bulkDelApply');
             }
-            saveData();
-            renderPanelBody();
-            toast(moved ? ('已转移 ' + moved + ' 张') : '没有需要转移的字卡');
-          }, 'bulkMove');
-        });
-      }
+          });
+        }, 'bulkDel');
+      });
+      var bulkMove = body.querySelector('#ma-bulk-move'), bulkTarget = body.querySelector('#ma-bulk-target');
+      if (bulkMove && bulkTarget) bulkMove.addEventListener('click', function () {
+        safe(function () {
+          var tid = bulkTarget.value; if (!tid) { toast('请选择目标'); return; }
+          var tgt = findGroup(tid); if (!tgt) return;
+          var cids = []; eachNode(body, '.ma-card-check', function (cb) { if (cb.checked) cids.push(cb.getAttribute('data-cid')); });
+          if (!cids.length) { toast('请先勾选'); return; }
+          var moved = 0;
+          for (var i = 0; i < cids.length; i++) { var f = findCard(cids[i]); if (f && f.group.id !== tid) { f.group.cards = f.group.cards.filter(function (x) { return x.id !== f.card.id; }); tgt.cards.push(f.card); moved++; } }
+          saveData(); renderPanelBody(); toast(moved ? '已转移 ' + moved + ' 张' : '无需转移');
+        }, 'bulkMove');
+      });
     }, 'bindCardsEvents');
   }
 
-  /* ---------- 分组操作执行 ---------- */
   function handleGroupAction(act, gid) {
-    var g = findGroup(gid);
-    if (!g) return;
-
-    /* 重命名 */
+    var g = findGroup(gid); if (!g) return;
     if (act === 'rename') {
       confirmModal({
-        title: '重命名分类',
-        html: '<input type="text" class="ma-input" id="ma-rename-input" maxlength="20" value="' + esc(g.name) + '">',
-        okText: '保存',
+        title: '重命名分类', html: '<input type="text" class="ma-input" id="ma-rename-input" maxlength="20" value="' + esc(g.name) + '">', okText: '保存',
         onOk: function () {
-          safe(function () {
-            var inp = document.getElementById('ma-rename-input');
-            if (!inp) return;
-            var v = String(inp.value || '').trim();
-            if (!v) { toast('名称不能为空'); return; }
-            g.name = v;
-            saveData();
-            renderPanelBody();
-            toast('已重命名');
-          }, 'rename:apply');
+          safe(function () { var i = document.getElementById('ma-rename-input'); if (!i) return; var v = String(i.value || '').trim(); if (!v) { toast('不能为空'); return; } g.name = v; saveData(); renderPanelBody(); toast('已重命名'); }, 'renameApply');
         }
       });
-      setTimeout(function () {
-        try {
-          var i = document.getElementById('ma-rename-input');
-          if (i) { i.focus(); i.select(); }
-        } catch (e) {}
-      }, 50);
-      return;
+      setTimeout(function () { try { var i = document.getElementById('ma-rename-input'); if (i) { i.focus(); i.select(); } } catch (e) {} }, 50); return;
     }
-
-    /* 上移 / 下移 */
     if (act === 'up' || act === 'down') {
-      var idx = arrFindIndex(DB.groups, function (x) { return x.id === gid; });
-      if (idx < 0) return;
-      var target = act === 'up' ? idx - 1 : idx + 1;
-      if (target < 0 || target >= DB.groups.length) return;
-      var tmp = DB.groups[idx];
-      DB.groups[idx] = DB.groups[target];
-      DB.groups[target] = tmp;
-      saveData();
-      renderPanelBody();
-      return;
+      var idx = arrFindIndex(DB.groups, function (x) { return x.id === gid; }); if (idx < 0) return;
+      var target = act === 'up' ? idx - 1 : idx + 1; if (target < 0 || target >= DB.groups.length) return;
+      var tmp = DB.groups[idx]; DB.groups[idx] = DB.groups[target]; DB.groups[target] = tmp; saveData(); renderPanelBody(); return;
     }
-
-    /* 禁用 / 启用（对分组） */
     if (act === 'toggle') {
-      if ((g.disabledBy || []).indexOf('user') >= 0) {
-        g.disabledBy = g.disabledBy.filter(function (x) { return x !== 'user'; });
-      } else {
-        if (!Array.isArray(g.disabledBy)) g.disabledBy = [];
-        g.disabledBy.push('user');
-      }
-      saveData();
-      renderPanelBody();
-      return;
+      if ((g.disabledBy || []).indexOf('user') >= 0) g.disabledBy = g.disabledBy.filter(function (x) { return x !== 'user'; });
+      else { if (!Array.isArray(g.disabledBy)) g.disabledBy = []; g.disabledBy.push('user'); }
+      saveData(); renderPanelBody(); return;
     }
-
-    /* 删除分类 */
     if (act === 'delete') {
-      /* 空分类直接删 */
-      if (!g.cards.length) {
-        DB.groups = DB.groups.filter(function (x) { return x.id !== gid; });
-        if (OPEN_GROUPS) delete OPEN_GROUPS[gid];
-        saveData();
-        renderPanelBody();
-        toast('已删除分类');
-        return;
-      }
-
-      /* 非空分类：必须选择迁移目标（用户要求） */
-      var others = [];
-      for (var oi = 0; oi < DB.groups.length; oi++) {
-        if (DB.groups[oi].id !== gid) others.push(DB.groups[oi]);
-      }
-      if (!others.length) {
-        confirmModal({
-          title: '无法删除',
-          body: '这是唯一的分类，且含 ' + g.cards.length + ' 张字卡。请先创建另一个分类再删除。',
-          okText: '知道了'
-        });
-        return;
-      }
-
-      var opts = '';
-      for (var oi2 = 0; oi2 < others.length; oi2++) {
-        opts += '<option value="' + esc(others[oi2].id) + '">' + esc(others[oi2].name) + '</option>';
-      }
-
+      if (!g.cards.length) { DB.groups = DB.groups.filter(function (x) { return x.id !== gid; }); if (OPEN_GROUPS) delete OPEN_GROUPS[gid]; saveData(); renderPanelBody(); toast('已删除'); return; }
+      var others = []; for (var oi = 0; oi < DB.groups.length; oi++) if (DB.groups[oi].id !== gid) others.push(DB.groups[oi]);
+      if (!others.length) { confirmModal({ title: '无法删除', body: '唯一分类且含字卡，请先创建其他分类。', okText: '知道了' }); return; }
+      var opts = ''; for (var oi2 = 0; oi2 < others.length; oi2++) opts += '<option value="' + esc(others[oi2].id) + '">' + esc(others[oi2].name) + '</option>';
       confirmModal({
-        title: '删除分类',
-        html:
-          '<div style="line-height:1.6;">分类「<b>' + esc(g.name) + '</b>」有 <b>' + g.cards.length + '</b> 张字卡。<br>' +
-          '请选择将这些字卡<b>全部转移到</b>：</div>' +
-          '<select class="ma-select" id="ma-del-target" style="margin-top:10px;">' + opts + '</select>',
-        okText: '迁移并删除',
-        danger: true,
+        title: '删除分类', html: '<div>分类「<b>' + esc(g.name) + '</b>」有 <b>' + g.cards.length + '</b> 张字卡，请选择转移目标：</div><select class="ma-select" id="ma-del-target" style="margin-top:10px;">' + opts + '</select>', okText: '迁移并删除', danger: true,
         onOk: function () {
           safe(function () {
-            var sel = document.getElementById('ma-del-target');
-            var tid = sel ? sel.value : '';
-            var target = findGroup(tid);
-            if (!target) { toast('目标分类不存在'); return; }
-            var movedCount = g.cards.length;
-            for (var i = 0; i < g.cards.length; i++) {
-              target.cards.push(g.cards[i]);
-            }
-            DB.groups = DB.groups.filter(function (x) { return x.id !== gid; });
-            if (OPEN_GROUPS) delete OPEN_GROUPS[gid];
-            saveData();
-            renderPanelBody();
-            toast('已迁移 ' + movedCount + ' 张字卡并删除分类');
-          }, 'deleteGroup:apply');
+            var sel = document.getElementById('ma-del-target'), tid = sel ? sel.value : '', tgt = findGroup(tid); if (!tgt) { toast('目标不存在'); return; }
+            var cnt = g.cards.length; for (var i = 0; i < g.cards.length; i++) tgt.cards.push(g.cards[i]);
+            DB.groups = DB.groups.filter(function (x) { return x.id !== gid; }); if (OPEN_GROUPS) delete OPEN_GROUPS[gid];
+            saveData(); renderPanelBody(); toast('已转移 ' + cnt + ' 张并删除');
+          }, 'delGrpApply');
         }
       });
       return;
     }
   }
 
-  /* ---------- 单卡操作执行 ---------- */
   function handleCardAction(act, cid) {
-    var f = findCard(cid);
-    if (!f) return;
-    var card = f.card;
-
-    /* 编辑 */
+    var f = findCard(cid); if (!f) return; var card = f.card;
     if (act === 'edit') {
       confirmModal({
-        title: '编辑字卡',
-        html: '<textarea class="ma-textarea" id="ma-edit-input" maxlength="500">' + esc(card.text) + '</textarea>',
-        okText: '保存',
+        title: '编辑字卡', html: '<textarea class="ma-textarea" id="ma-edit-input" maxlength="500">' + esc(card.text) + '</textarea>', okText: '保存',
         onOk: function () {
-          safe(function () {
-            var inp = document.getElementById('ma-edit-input');
-            if (!inp) return;
-            var v = String(inp.value || '').trim();
-            if (!v) { toast('内容不能为空'); return; }
-            card.text = v;
-            saveData();
-            renderPanelBody();
-            toast('已保存');
-          }, 'editCard:apply');
+          safe(function () { var i = document.getElementById('ma-edit-input'); if (!i) return; var v = String(i.value || '').trim(); if (!v) { toast('不能为空'); return; } card.text = v; saveData(); renderPanelBody(); toast('已保存'); }, 'editApply');
         }
       });
-      setTimeout(function () {
-        try {
-          var i = document.getElementById('ma-edit-input');
-          if (i) { i.focus(); }
-        } catch (e) {}
-      }, 50);
-      return;
+      setTimeout(function () { try { var i = document.getElementById('ma-edit-input'); if (i) i.focus(); } catch (e) {} }, 50); return;
     }
-
-    /* 发送 */
-    if (act === 'send') {
-      safe(function () { sendCardToChat(cid); }, 'sendCard:' + cid);
-      return;
-    }
-
-    /* 禁用 / 启用（只操作 'user'） */
+    if (act === 'send') { safe(function () { sendCardToChat(cid); }, 'sendCard'); return; }
     if (act === 'toggle') {
       if (!Array.isArray(card.disabledBy)) card.disabledBy = [];
-      if (card.disabledBy.indexOf('user') >= 0) {
-        card.disabledBy = card.disabledBy.filter(function (x) { return x !== 'user'; });
-      } else {
-        card.disabledBy.push('user');
-      }
-      saveData();
-      renderPanelBody();
-      return;
+      if (card.disabledBy.indexOf('user') >= 0) card.disabledBy = card.disabledBy.filter(function (x) { return x !== 'user'; });
+      else card.disabledBy.push('user');
+      saveData(); renderPanelBody(); return;
     }
-
-    /* 删除 */
     if (act === 'delete') {
       confirmModal({
-        title: '删除字卡',
-        body: '确定删除这张字卡？此操作不可撤销。',
-        danger: true,
-        okText: '删除',
-        onOk: function () {
-          safe(function () {
-            f.group.cards = f.group.cards.filter(function (x) { return x.id !== cid; });
-            saveData();
-            renderPanelBody();
-            toast('已删除');
-          }, 'deleteCard:apply');
-        }
-      });
-      return;
+        title: '删除字卡', body: '确定删除？此操作不可撤销。', danger: true, okText: '删除',
+        onOk: function () { safe(function () { f.group.cards = f.group.cards.filter(function (x) { return x.id !== cid; }); saveData(); renderPanelBody(); toast('已删除'); }, 'delCardApply'); }
+      }); return;
     }
   }
 
-  /* ==========================================================================
-   * 模块六（基础版）：点击【发送】→ 写入 chat-msgs → 尝试无刷新渲染
-   * 说明：本函数在第 4 部分会做"无刷新渲染"的增强版封装，但这里先提供完整可用的基础实现。
-   * ========================================================================== */
+  // 手动点击发送按钮
   function sendCardToChat(cid) {
     safe(function () {
       var f = findCard(cid);
@@ -2781,224 +1228,212 @@
       var text = f.card.text;
       if (!text) { toast('字卡内容为空'); return; }
 
-      /* 1. 写入 localStorage */
-      var msgs = readChatMsgs();
-      msgs.push({ side: 'in', text: text, time: Date.now() });
-      if (!writeChatMsgs(msgs)) { toast('发送失败，无法写入'); return; }
-
-      /* 2. 优先调用原站框架渲染 */
-      var rendered = false;
-      try {
-        if (typeof window.loadMsgs === 'function') {
-          window.loadMsgs();
-          rendered = true;
-        }
-      } catch (e1) {}
-      try {
-        if (typeof window.renderWindow === 'function') {
-          window.renderWindow();
-          rendered = true;
-        }
-      } catch (e2) {}
-
-      /* 3. 兜底 DOM 插入 */
-      if (!rendered) {
-        try {
-          var chatBody = document.querySelector('#chat-body');
-          if (chatBody) {
-            var bubble = document.createElement('div');
-            bubble.className = 'msg in ma-injected-msg';
-            bubble.setAttribute('data-ma-injected', '1');
-            bubble.textContent = text;
-            bubble.style.cssText =
-              'max-width:75%;padding:8px 12px;margin:6px 0 6px auto;' +
-              'background:#ff6b81;color:#fff;border-radius:14px;word-break:break-all;' +
-              'font-size:14px;width:fit-content;width:-webkit-fit-content;' +
-              'box-sizing:border-box;';
-            chatBody.appendChild(bubble);
-            try { chatBody.scrollTop = chatBody.scrollHeight; } catch (e) {}
-            rendered = true;
-          }
-        } catch (e3) {}
-      }
-
-      if (rendered) {
+      // 直接调用新写的核心注入函数
+      var ok = injectBubbleToChat(text);
+      if (ok) {
         toast('已发送');
       } else {
-        toast('消息已保存，刷新页面后可见');
+        toast('消息已保存，刷新页面后可见'); // 兜底提示
       }
     }, 'sendCardToChat');
   }
-  /* ==========================================================================
-   * 第 4 部分：初始化引导 + 生命周期守护 + 收尾
-   * ========================================================================== */
 
-  /* --------------------------- URL 参数解析 --------------------------- */
+  /* 设置面板及裁剪 (简写保留核心) */
+  function renderSettingsTab() {
+    var s = DB.settings, h = '';
+    h += '<div class="ma-set-block"><div class="ma-set-title">悬浮球外观</div><div class="ma-row"><span class="ma-label" style="width:52px;">颜色</span><input type="color" id="ma-set-color" value="' + esc(s.ballColor) + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.ballColor) + '</span></div>';
+    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">大小</span><input type="range" class="ma-range" id="ma-set-size" min="36" max="88" step="1" value="' + s.ballSize + '"><span class="ma-label" id="ma-set-size-val" style="width:44px;text-align:right;">' + s.ballSize + 'px</span></div>';
+    h += '<div class="ma-row"><div class="ma-thumb" id="ma-set-ball-thumb" style="' + (s.ballImage ? 'background-image:url(&quot;' + s.ballImage + '&quot;);' : 'background:' + esc(s.ballColor) + ';') + '"></div><button class="ma-btn sm" id="ma-set-ball-upload">上传图片</button>' + (s.ballImage ? '<button class="ma-btn sm danger" id="ma-set-ball-clear">移除</button>' : '') + '</div></div>';
+    h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div><div class="ma-row"><div class="ma-thumb square" id="ma-set-app-thumb" style="' + (s.appImage ? 'background-image:url(&quot;' + s.appImage + '&quot;);' : 'background:#f5f5f5;') + '"></div><button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>' + (s.appImage ? '<button class="ma-btn sm danger" id="ma-set-app-clear">移除</button>' : '') + '</div></div>';
+    h += '<div class="ma-set-block"><div class="ma-set-title">入口显示</div><div class="ma-row" style="justify-content:space-between;"><div><div style="font-size:13px;">隐藏所有入口</div><div style="font-size:11px;color:#aaa;">开启后点击原生图标恢复，或加 ?show_audit=true</div></div><div class="ma-switch' + (s.hideAll ? ' on' : '') + '" id="ma-set-hide"></div></div></div>';
+    h += '<div class="ma-set-block"><div class="ma-set-title">数据备份</div><div class="ma-row wrap"><button class="ma-btn" id="ma-export">导出备份</button><button class="ma-btn danger" id="ma-import">导入备份</button><input type="file" id="ma-import-file" accept=".json" style="display:none;"></div></div>';
+    return h;
+  }
+
+  function bindSettingsEvents(body) {
+    safe(function () {
+      var c = body.querySelector('#ma-set-color'); if (c) { c.addEventListener('input', function () { safe(function () { DB.settings.ballColor = c.value; var t = body.querySelector('#ma-set-ball-thumb'); if (t && !DB.settings.ballImage) t.style.background = c.value; applyAppearance(); }, 'colorIn'); }); c.addEventListener('change', function () { saveData(); applyAppearance(); renderPanelBody(); }); }
+      var sz = body.querySelector('#ma-set-size'), szv = body.querySelector('#ma-set-size-val');
+      if (sz) { sz.addEventListener('input', function () { safe(function () { var v = clamp(parseInt(sz.value, 10) || 52, 36, 88); DB.settings.ballSize = v; if (szv) szv.textContent = v + 'px'; applyAppearance(); applyFabPosition(); }, 'sizeIn'); }); sz.addEventListener('change', function () { saveData(); }); }
+      var bu = body.querySelector('#ma-set-ball-upload'); if (bu) bu.addEventListener('click', function () { openCropper({ title: '裁剪悬浮球', shape: 'circle', onConfirm: function (d) { safe(function () { DB.settings.ballImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'ballImg'); } }); });
+      var bc = body.querySelector('#ma-set-ball-clear'); if (bc) bc.addEventListener('click', function () { safe(function () { DB.settings.ballImage = ''; saveData(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'ballClr'); });
+      var au = body.querySelector('#ma-set-app-upload'); if (au) au.addEventListener('click', function () { openCropper({ title: '裁剪图标', shape: 'square', onConfirm: function (d) { safe(function () { DB.settings.appImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'appImg'); } }); });
+      var ac = body.querySelector('#ma-set-app-clear'); if (ac) ac.addEventListener('click', function () { safe(function () { DB.settings.appImage = ''; saveData(); refreshAppIcon(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'appClr'); });
+      var hd = body.querySelector('#ma-set-hide'); if (hd) hd.addEventListener('click', function () { safe(function () { DB.settings.hideAll = !DB.settings.hideAll; saveData(); hd.classList.toggle('on', DB.settings.hideAll); applyVisibility(); toast(DB.settings.hideAll ? '已隐藏，可通过原生图标恢复' : '已恢复'); }, 'hideSet'); });
+      
+      var exp = body.querySelector('#ma-export');
+      if (exp) exp.addEventListener('click', function () {
+        safe(function () {
+          var blob = new Blob([JSON.stringify({ __ma_backup: true, exportedAt: Date.now(), data: DB }, null, 2)], { type: 'application/json' });
+          var url = URL.createObjectURL(blob), a = document.createElement('a'), d = new Date();
+          a.href = url; a.download = 'audit-backup-' + d.getTime() + '.json'; document.body.appendChild(a); a.click();
+          setTimeout(function () { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e) {} }, 200); toast('已导出');
+        }, 'export');
+      });
+      var imp = body.querySelector('#ma-import'), impf = body.querySelector('#ma-import-file');
+      if (imp && impf) {
+        imp.addEventListener('click', function () { impf.click(); });
+        impf.addEventListener('change', function () {
+          safe(function () {
+            var f = impf.files && impf.files[0]; if (!f) return;
+            var fr = new FileReader();
+            fr.onload = function () {
+              safe(function () {
+                var obj = JSON.parse(fr.result), inc = obj && obj.__ma_backup ? obj.data : obj;
+                if (!inc) { toast('格式错误'); return; }
+                confirmModal({
+                  title: '确认导入', body: '将覆盖当前所有数据，是否继续？', danger: true, okText: '覆盖', onOk: function () {
+                    safe(function () { DB = normalizeData(inc); saveData(); applyAppearance(); applyFabPosition(); applyVisibility(); refreshAppIcon(); renderTabs(); renderPanelBody(); updateBadge(); toast('导入成功'); }, 'impApply');
+                  }
+                });
+              }, 'impParse');
+            };
+            fr.readAsText(f, 'utf-8');
+          }, 'impChange');
+        });
+      }
+    }, 'bindSetEvents');
+  }
+
+  function confirmModal(opts) {
+    safe(function () {
+      ensureRoot(); var mask = document.getElementById('ma-modal-mask');
+      if (!mask) { mask = document.createElement('div'); mask.id = 'ma-modal-mask'; ROOT.appendChild(mask); }
+      var o = opts || {};
+      mask.innerHTML = '<div class="ma-modal"><div class="ma-modal-title">' + esc(o.title || '提示') + '</div><div class="ma-modal-body">' + (o.html || esc(o.body || '')) + '</div><div class="ma-modal-actions"><button class="ma-btn" data-act="cancel">' + esc(o.cancelText || '取消') + '</button><button class="ma-btn ' + (o.danger ? 'danger' : 'primary') + '" data-act="ok">' + esc(o.okText || '确定') + '</button></div></div>';
+      mask.classList.add('on');
+      mask.onclick = function (e) {
+        if (e.target === mask) { mask.classList.remove('on'); return; }
+        var btn = e.target.closest ? e.target.closest('[data-act]') : null; if (!btn) return;
+        var isOk = btn.getAttribute('data-act') === 'ok';
+        mask.classList.remove('on');
+        if (isOk && typeof o.onOk === 'function') safe(o.onOk, 'modalOk');
+        else if (!isOk && typeof o.onCancel === 'function') safe(o.onCancel, 'modalCancel');
+      };
+    }, 'confirmModal');
+  }
+
+  var cropState = null;
+  function openCropper(opts) {
+    safe(function () {
+      var fi = document.createElement('input'); fi.type = 'file'; fi.accept = 'image/*'; fi.style.display = 'none'; document.body.appendChild(fi);
+      fi.addEventListener('change', function () {
+        safe(function () {
+          var f = fi.files && fi.files[0]; if (!f) { try { document.body.removeChild(fi); } catch (e) {} return; }
+          if (f.size > 12 * 1024 * 1024) { toast('图片过大（>12MB）'); try { document.body.removeChild(fi); } catch (e) {} return; }
+          var fr = new FileReader();
+          fr.onload = function () { var img = new Image(); img.onload = function () { showCropUI(img, opts); try { document.body.removeChild(fi); } catch (e) {} }; img.src = fr.result; };
+          fr.readAsDataURL(f);
+        }, 'cropChange');
+      });
+      fi.click();
+    }, 'openCropper');
+  }
+
+  function showCropUI(img, opts) {
+    safe(function () {
+      ensureRoot(); var mask = document.getElementById('ma-crop-mask'); if (!mask) { mask = document.createElement('div'); mask.id = 'ma-crop-mask'; ROOT.appendChild(mask); }
+      var o = opts || {}, SIZE = Math.min(240, Math.max(180, (window.innerWidth || 375) - 100)), isCircle = o.shape !== 'square', radius = isCircle ? '50%' : '18px';
+      mask.innerHTML = '<div class="ma-crop-box"><div class="ma-crop-title">' + esc(o.title) + '</div><div class="ma-crop-stage"><div class="ma-crop-canvas-wrap" id="ma-crop-wrap" style="width:' + SIZE + 'px;height:' + SIZE + 'px;border-radius:' + radius + ';overflow:hidden;box-shadow:0 0 0 9999px rgba(0,0,0,.32),0 0 0 1px rgba(255,255,255,.5);"><canvas class="ma-crop-canvas" id="ma-crop-canvas"></canvas></div></div><div class="ma-crop-hint">拖动图片调整位置</div><div class="ma-crop-zoom"><span style="font-size:12px;color:#999;">缩放</span><input type="range" id="ma-crop-zoom" min="1" max="3" step="0.01" value="1"></div><div class="ma-crop-actions"><button class="ma-btn" id="ma-crop-cancel">取消</button><button class="ma-btn primary" id="ma-crop-ok">确认</button></div></div>';
+      var canvas = mask.querySelector('#ma-crop-canvas'), wrap = mask.querySelector('#ma-crop-wrap'), zoomEl = mask.querySelector('#ma-crop-zoom');
+      var dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(SIZE * dpr); canvas.height = Math.round(SIZE * dpr); canvas.style.width = SIZE + 'px'; canvas.style.height = SIZE + 'px';
+      var ctx = canvas.getContext('2d');
+      var st = { img: img, size: SIZE, dpr: dpr, ctx: ctx, baseScale: Math.max(SIZE / img.width, SIZE / img.height), zoom: 1, ox: 0, oy: 0 };
+      cropState = st;
+      function clampOffset() { var s = st.baseScale * st.zoom, w = st.img.width * s, h = st.img.height * s; st.ox = Math.max(-Math.max(0, (w - st.size) / 2), Math.min(Math.max(0, (w - st.size) / 2), st.ox)); st.oy = Math.max(-Math.max(0, (h - st.size) / 2), Math.min(Math.max(0, (h - st.size) / 2), st.oy)); }
+      function draw() { safe(function () { clampOffset(); var s = st.baseScale * st.zoom, size = st.size; ctx.setTransform(st.dpr, 0, 0, st.dpr, 0, 0); ctx.clearRect(0, 0, size, size); ctx.save(); ctx.translate(size / 2 + st.ox, size / 2 + st.oy); ctx.scale(s, s); ctx.drawImage(st.img, -st.img.width / 2, -st.img.height / 2); ctx.restore(); }, 'draw'); }
+      draw(); mask.classList.add('on');
+      var dragging = false, lx = 0, ly = 0;
+      wrap.addEventListener(window.PointerEvent ? 'pointerdown' : 'mousedown', function (e) { dragging = true; lx = e.clientX; ly = e.clientY; e.preventDefault(); });
+      (window.PointerEvent ? wrap : document).addEventListener(window.PointerEvent ? 'pointermove' : 'mousemove', function (e) { if (!dragging) return; st.ox += (e.clientX - lx); st.oy += (e.clientY - ly); lx = e.clientX; ly = e.clientY; draw(); e.preventDefault(); });
+      (window.PointerEvent ? wrap : document).addEventListener(window.PointerEvent ? 'pointerup' : 'mouseup', function () { dragging = false; });
+      zoomEl.addEventListener('input', function () { safe(function () { st.zoom = clamp(parseFloat(zoomEl.value) || 1, 1, 3); draw(); }, 'zoom'); });
+      mask.querySelector('#ma-crop-cancel').addEventListener('click', function () { mask.classList.remove('on'); cropState = null; });
+      mask.querySelector('#ma-crop-ok').addEventListener('click', function () {
+        safe(function () {
+          var OUT = 256, k = OUT / st.size, s = st.baseScale * st.zoom, oc = document.createElement('canvas');
+          oc.width = OUT; oc.height = OUT; var octx = oc.getContext('2d');
+          octx.save(); octx.translate(OUT / 2 + st.ox * k, OUT / 2 + st.oy * k); octx.scale(s * k, s * k); octx.drawImage(st.img, -st.img.width / 2, -st.img.height / 2); octx.restore();
+          var d = oc.toDataURL('image/webp', 0.92); if (d.indexOf('data:image/webp') !== 0) d = oc.toDataURL('image/png');
+          mask.classList.remove('on'); cropState = null;
+          if (typeof o.onConfirm === 'function') o.onConfirm(d);
+        }, 'cropOk');
+      });
+    }, 'showCropUI');
+  }
+
+  /* ==========================================================================
+   * 启动与守护
+   * ========================================================================== */
   function parseUrlForceShow() {
     return safe(function () {
       var search = (window.location && window.location.search) || '';
       if (!search) return false;
-
-      if (typeof URLSearchParams !== 'undefined') {
-        try {
-          var params = new URLSearchParams(search);
-          var v = params.get('show_audit');
-          if (v === 'true' || v === '1') return true;
-          if (v === 'false' || v === '0') return false;
-        } catch (e) { /* ignore */ }
-      }
+      if (typeof URLSearchParams !== 'undefined') { try { var v = new URLSearchParams(search).get('show_audit'); if (v === 'true' || v === '1') return true; } catch (e) {} }
       return /[?&]show_audit=(true|1)(?:&|$)/i.test(search);
     }, 'parseUrlForceShow', false);
   }
 
-  /* --------------------------- DOM ready 兼容 --------------------------- */
   function onReady(fn) {
     safe(function () {
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function () {
-          safe(fn, 'ready:cb');
-        }, { once: true });
-      } else {
-        // 已加载完成，异步调度，避免阻塞原页面
-        setTimeout(function () { safe(fn, 'ready:cb'); }, 0);
-      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { safe(fn, 'ready:cb'); }, { once: true });
+      else setTimeout(function () { safe(fn, 'ready:cb'); }, 0);
     }, 'onReady');
   }
 
-  /* --------------------------- 生命周期守护 --------------------------- */
-  /* 原网站若发生整页重渲染（SPA 常见），我们的 root 可能被移除。
-   * 这里以 3 秒频率轻量巡检，发现丢失则重建入口与面板骨架。
-   * 注意：只在 root 被移除时重建，不会打断用户正在进行的操作。
-   */
-  var guardTimer = null;
-
   function startGuard() {
     safe(function () {
-      if (guardTimer) return;
-      guardTimer = setInterval(function () {
+      if (window.__maGuardTimer) return;
+      window.__maGuardTimer = setInterval(function () {
         safe(function () {
           if (!document.body) return;
-
-          /* 1. root 丢失 → 全量重建入口 */
           if (!ROOT || !document.body.contains(ROOT)) {
-            ROOT = null;
-            FAB = null;
-            MASK = null;
-            PANEL = null;
-            PANEL_OPEN = false;
-
-            safe(function () { buildFab(); }, 'guard:buildFab');
-            safe(function () { buildUI(); }, 'guard:buildUI');
-            safe(function () { applyAppearance(); }, 'guard:appearance');
-            safe(function () { applyFabPosition(); }, 'guard:pos');
-            safe(function () { applyVisibility(); }, 'guard:vis');
-            safe(function () { updateBadge(); }, 'guard:badge');
+            ROOT = null; FAB = null; MASK = null; PANEL = null; PANEL_OPEN = false;
+            safe(buildFab, 'gFab'); safe(buildUI, 'gUI'); safe(applyAppearance, 'gApp'); safe(applyFabPosition, 'gPos'); safe(applyVisibility, 'gVis'); safe(updateBadge, 'gBadge');
           }
-
-          /* 2. 克隆图标丢失 → 重新克隆注入 */
           if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) {
-            APP_ICON_EL = null;
-            APP_ICON_IMG_EL = null;
-            safe(function () { injectAppIcon(); }, 'guard:appIcon');
-            safe(function () { applyAppearance(); }, 'guard:appIconAppearance');
-            safe(function () { applyVisibility(); }, 'guard:appIconVis');
-            safe(function () { updateBadge(); }, 'guard:appIconBadge');
+            APP_ICON_EL = null; APP_ICON_IMG_EL = null;
+            safe(injectAppIcon, 'gAppIcon'); safe(applyAppearance, 'gAppIconApp'); safe(applyVisibility, 'gAppIconVis'); safe(updateBadge, 'gAppIconBadge');
           }
-        }, 'guard:tick');
+        }, 'guard');
       }, 3000);
     }, 'startGuard');
   }
 
-  /* --------------------------- 主启动流程 --------------------------- */
   function bootstrap() {
-    /* 1. 解析 URL（?show_audit=true 强制唤醒） */
     URL_FORCE_SHOW = parseUrlForceShow();
-
-    /* 2. 数据层装载（loadData 内部已 try/catch + 结构校验） */
     DB = loadData();
-
-    /* 3. 样式注入（最早注入，避免闪烁） */
-    injectCSS();
-
-    /* 4. 根容器 */
-    ensureRoot();
-
-    /* 5. 双入口 UI */
-    buildFab();          // 悬浮球（第 2 部分）
-    buildUI();           // 面板骨架 + 裁剪器容器 + 模态容器 + toast（第 2 部分）
-
-    /* 6. 外观 & 位置 & 可见性 */
-    applyAppearance();   // 颜色 / 大小 / 图片
-    applyFabPosition();  // 悬浮球位置
-    applyVisibility();   // hideAll 逻辑（内置 URL_FORCE_SHOW 豁免）
-    updateBadge();       // 静默红点
-
-    /* 7. 窗口 resize 监听 */
-    bindResize();
-
-    /* 8. 原生 App 图标克隆注入（带轮询，等待原页面异步渲染完成） */
-    startAppIconWatcher();
-
-    /* 9. 梦角引擎启动（首跑 + 30 分钟周期） */
-    startEngine();
-
-    /* 10. 生命周期守护 */
-    startGuard();
-
-    /* 11. URL 强制唤醒的可见反馈（静默 toast，不 alert） */
-    if (URL_FORCE_SHOW) {
-      safe(function () {
-        if (FAB) FAB.classList.remove('ma-hidden');
-        if (APP_ICON_EL) APP_ICON_EL.classList.remove('ma-hidden');
-        toast('已通过 ?show_audit=true 强制唤醒审核入口');
-      }, 'forceShow:toast');
+    injectCSS(); ensureRoot();
+    buildFab(); buildUI();
+    applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
+    if (!window.__maResizeBound) {
+      window.__maResizeBound = true;
+      window.addEventListener('resize', function () {
+        safe(function () {
+          if (!FAB) return;
+          var size = FAB.offsetWidth || DB.settings.ballSize || 52;
+          FAB.style.left = clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)) + 'px';
+          FAB.style.top = clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) + 'px';
+        }, 'resize');
+      });
     }
-
-    /* 12. 调试接口（可选） */
-    safe(function () {
-      window.__MY_AUDIT_READY__ = true;
-    }, 'readyFlag');
+    startAppIconWatcher();
+    startEngine();
+    startGuard();
+    if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已通过 ?show_audit=true 强制唤醒'); }, 'forceTo'); }
   }
 
-  /* --------------------------- 启动调度（多级兜底） --------------------------- */
   try {
     onReady(function () {
-      try {
-        bootstrap();
-      } catch (bootErr) {
-        /* 一级兜底：bootstrap 失败时，至少把样式和根容器注入，绝不白屏 */
-        try { console.warn('[审计] bootstrap 失败：', bootErr); } catch (e1) {}
-        try { injectCSS(); } catch (e2) {}
-        try { ensureRoot(); } catch (e3) {}
-        try { toast('审核外挂初始化异常，已降级为静默模式'); } catch (e4) {}
+      try { bootstrap(); } catch (err) {
+        try { console.warn('[审计] bootstrap 失败：', err); } catch (e1) {}
+        try { injectCSS(); ensureRoot(); toast('初始化异常，降级静默'); } catch (e2) {}
       }
     });
-  } catch (schedErr) {
-    /* 二级兜底：连 onReady 都失败（极端环境），只尝试注入样式 */
-    try { console.warn('[审计] onReady 失败：', schedErr); } catch (e1) {}
+  } catch (e) {
+    try { console.warn('[审计] 启动彻底失败：', e); } catch (e1) {}
     try { injectCSS(); } catch (e2) {}
   }
-
-  /* --------------------------- 卸载清理（供调试使用） --------------------------- */
-  try {
-    window.__MY_AUDIT_UNMOUNT__ = function () {
-      safe(function () {
-        if (guardTimer) { clearInterval(guardTimer); guardTimer = null; }
-        if (appIconInjectTimer) { clearInterval(appIconInjectTimer); appIconInjectTimer = null; }
-        if (ROOT && ROOT.parentNode) {
-          try { ROOT.parentNode.removeChild(ROOT); } catch (e) {}
-        }
-        if (APP_ICON_EL && APP_ICON_EL.parentNode) {
-          try { APP_ICON_EL.parentNode.removeChild(APP_ICON_EL); } catch (e) {}
-        }
-        var style = document.getElementById('ma-style');
-        if (style && style.parentNode) {
-          try { style.parentNode.removeChild(style); } catch (e) {}
-        }
-        window.__MY_AUDIT_LOADED__ = false;
-        window.__MY_AUDIT_READY__ = false;
-      }, 'unmount');
-    };
-  } catch (e) { /* ignore */ }
 
 })();
