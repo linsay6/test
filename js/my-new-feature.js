@@ -1,6 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 终极完美版
- * 修复：1. 移除图片丝滑秒切 2. 彻底恢复原生默认图标 3. requestAnimationFrame 极限同步加载
+ * my-new-feature.js 极限性能版 (最终版)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -19,7 +18,7 @@
 
   var DB = null, ROOT = null, FAB = null, MASK = null, PANEL = null;
   var CURRENT_TAB = 'pending', PANEL_OPEN = false, URL_FORCE_SHOW = false;
-  var APP_ICON_EL = null, APP_ICON_IMG_EL = null;
+  var APP_ICON_EL = null, APP_ICON_IMG_EL = null, ORIGINAL_APP_HTML = null;
   var OPEN_GROUPS = null;
   var INJECTED_MSGS = []; 
 
@@ -34,6 +33,7 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
+  /* --- 数据防覆盖底层拦截 --- */
   (function hookLocalStorage() {
     try {
       var originalSetItem = localStorage.setItem;
@@ -59,7 +59,7 @@
     } catch (e) {}
   })();
 
-  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', hideAll: false, ballPos: null }; }
+  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '#333333', hideAll: false, ballPos: null }; }
   function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0, isGrabbing: false } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
@@ -79,7 +79,10 @@
     if (!d.settings || typeof d.settings !== 'object') d.settings = defaultSettings();
     var s = d.settings, ds = defaultSettings();
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
-    if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; if (typeof s.hideAll !== 'boolean') s.hideAll = false;
+    if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; 
+    if (typeof s.appName !== 'string' || !s.appName) s.appName = ds.appName;
+    if (typeof s.appColor !== 'string' || !s.appColor) s.appColor = ds.appColor;
+    if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
     if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta; if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0; if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0; if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = []; if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400); if (typeof d.meta.isGrabbing !== 'boolean') d.meta.isGrabbing = false;
     return d;
@@ -313,10 +316,42 @@
   function bindFabDrag() {
     safe(function () {
       if (!FAB || FAB.__maDragBound) return; FAB.__maDragBound = true;
-      var dragging = false, startX = 0, startY = 0, originX = 0, originY = 0;
-      function onDown(e) { dragging = true; FAB.__maMoved = false; var r = FAB.getBoundingClientRect(); startX = e.clientX; startY = e.clientY; originX = r.left; originY = r.top; FAB.style.transition = 'none'; e.preventDefault(); }
-      function onMove(e) { if (!dragging) return; var dx = e.clientX - startX, dy = e.clientY - startY; if (!FAB.__maMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) FAB.__maMoved = true; if (!FAB.__maMoved) return; var size = FAB.offsetWidth || 52, w = window.innerWidth, h = window.innerHeight; FAB.style.left = clamp(originX + dx, 4, Math.max(4, w - size - 4)) + 'px'; FAB.style.top = clamp(originY + dy, 4, Math.max(4, h - size - 4)) + 'px'; e.preventDefault(); }
-      function onUp(e) { if (!dragging) return; dragging = false; FAB.style.transition = ''; if (FAB.__maMoved) { var size = FAB.offsetWidth || 52; DB.settings.ballPos = { x: clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)), y: clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) }; saveData(); } }
+      var dragging = false, startX = 0, startY = 0, originX = 0, originY = 0, rafId = null;
+      
+      function onDown(e) { 
+        dragging = true; FAB.__maMoved = false; 
+        var r = FAB.getBoundingClientRect(); 
+        startX = e.clientX; startY = e.clientY; originX = r.left; originY = r.top; 
+        FAB.style.transition = 'none'; 
+        e.preventDefault(); 
+      }
+      
+      function onMove(e) { 
+        if (!dragging) return; 
+        var dx = e.clientX - startX, dy = e.clientY - startY; 
+        if (!FAB.__maMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) FAB.__maMoved = true; 
+        if (!FAB.__maMoved) return; 
+        
+        if (rafId) return; // RAF 节流，绝不卡顿
+        rafId = requestAnimationFrame(function() {
+            var size = FAB.offsetWidth || 52, w = window.innerWidth, h = window.innerHeight; 
+            FAB.style.left = clamp(originX + dx, 4, Math.max(4, w - size - 4)) + 'px'; 
+            FAB.style.top = clamp(originY + dy, 4, Math.max(4, h - size - 4)) + 'px'; 
+            rafId = null;
+        });
+        e.preventDefault(); 
+      }
+      
+      function onUp(e) { 
+        if (!dragging) return; 
+        dragging = false; FAB.style.transition = ''; 
+        if (FAB.__maMoved) { 
+          var size = FAB.offsetWidth || 52; 
+          DB.settings.ballPos = { x: clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)), y: clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) }; 
+          saveData(); 
+        } 
+      }
+      
       if (window.PointerEvent) { FAB.addEventListener('pointerdown', onDown); FAB.addEventListener('pointermove', onMove); FAB.addEventListener('pointerup', onUp); }
     }, 'bindFabDrag');
   }
@@ -329,34 +364,61 @@
       var clone = null; try { clone = src.cloneNode(true); } catch (e) { return false; }
       if (clone.id) clone.removeAttribute('id');
       var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
+      
+      // 保存一份最原始的干净HTML，用于“移除自定义图标”时恢复
+      if (!ORIGINAL_APP_HTML) {
+          ORIGINAL_APP_HTML = clone.innerHTML;
+      }
+      
       clone.removeAttribute('style'); var styled = clone.querySelectorAll('[style]'); for (var si = 0; si < styled.length; si++) styled[si].removeAttribute('style');
       try { var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false); var textNodes = [], tn; while ((tn = walker.nextNode())) textNodes.push(tn); for (var ti = 0; ti < textNodes.length; ti++) textNodes[ti].nodeValue = ''; } catch (e6) {}
-      var nameEl = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
-      if (nameEl) nameEl.textContent = '审核'; else { var span = document.createElement('div'); span.className = 'ma-clone-name'; span.textContent = '审核'; span.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;'; clone.appendChild(span); }
       
+      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
+      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
+      
+      if (innerIcon) {
+          APP_ICON_IMG_EL = innerIcon;
+      } else {
+          APP_ICON_IMG_EL = document.createElement('div');
+          APP_ICON_IMG_EL.className = 'ma-custom-icon-wrap';
+          APP_ICON_IMG_EL.style.cssText = 'width:36px;height:36px;margin:0 auto 4px;border-radius:10px;background-color:#f5f5f5;background-size:cover;background-position:center;';
+          clone.insertBefore(APP_ICON_IMG_EL, clone.firstChild);
+      }
+
+      if (innerName) {
+          innerName.setAttribute('data-ma-name', '1');
+      } else {
+          var span = document.createElement('div'); span.setAttribute('data-ma-name', '1');
+          clone.appendChild(span);
+      }
+
       var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
-      try { APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]'); } catch (e11) {}
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
       APP_ICON_EL = clone;
       clone.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); openPanel(); });
-      applyVisibility(); applyAppearance(); updateBadge(); return true;
+      
+      applyAppearance(); updateBadge(); return true;
     }, 'injectAppIcon', false);
   }
 
-  /* 核心修复：改用 requestAnimationFrame 极限同步加载 */
-  function startAppIconRAF() {
+  /* 极速自适应监听，一旦DOM有插入，立刻用RAF渲染 */
+  function startAppIconObserver() {
     safe(function () {
+      if (window.__maAppIconObserver) return;
       if (injectAppIcon()) return;
-      var tries = 0;
-      function check() {
-        tries++;
-        if (injectAppIcon() || tries > 300) return; // 300帧约5秒，防止死循环
-        requestAnimationFrame(check);
-      }
-      requestAnimationFrame(check);
-    }, 'startAppIconRAF');
+
+      window.__maAppIconObserver = new MutationObserver(function () {
+        if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return;
+        requestAnimationFrame(function() {
+            var grid = document.querySelector('.app-grid');
+            if (grid) injectAppIcon();
+        });
+      });
+      
+      window.__maAppIconObserver.observe(document.body, { childList: true, subtree: true });
+    }, 'startAppIconObserver');
   }
 
   function applyVisibility() {
@@ -390,18 +452,38 @@
         if (s.ballImage) { FAB.style.backgroundImage = 'url("' + s.ballImage + '")'; FAB.style.backgroundColor = 'transparent'; FAB.classList.add('ma-has-img'); }
         else { FAB.style.backgroundImage = ''; FAB.style.backgroundColor = s.ballColor || '#ff6b81'; FAB.classList.remove('ma-has-img'); }
       }
-      if (APP_ICON_EL && s.appImage) {
-        var holder = APP_ICON_IMG_EL || APP_ICON_EL;
-        try { if (holder.tagName === 'IMG') holder.src = s.appImage; else if (holder.tagName === 'SVG') { APP_ICON_EL.style.backgroundImage = 'url("' + s.appImage + '")'; APP_ICON_EL.style.backgroundSize = 'cover'; APP_ICON_EL.style.backgroundPosition = 'center'; } else { holder.style.backgroundImage = 'url("' + s.appImage + '")'; holder.style.backgroundSize = 'cover'; holder.style.backgroundPosition = 'center'; } } catch (e) {}
-      } else if (APP_ICON_EL && !s.appImage) {
-        // 彻底恢复默认图标
-        try { 
-            APP_ICON_EL.style.backgroundImage = ''; 
-            if (APP_ICON_IMG_EL) {
-                if (APP_ICON_IMG_EL.tagName === 'IMG') APP_ICON_IMG_EL.removeAttribute('src');
-                else APP_ICON_IMG_EL.style.backgroundImage = '';
+      
+      if (APP_ICON_EL) {
+        var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
+        if (nameEl) {
+            nameEl.textContent = s.appName || '审核';
+            nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:' + (s.appColor || '#333333') + ';';
+        }
+        
+        var holder = APP_ICON_IMG_EL;
+        if (holder) {
+            if (s.appImage) {
+                if (holder.tagName === 'IMG') holder.src = s.appImage;
+                else {
+                    holder.style.backgroundImage = 'url("' + s.appImage + '")';
+                    holder.style.backgroundSize = 'cover';
+                    holder.style.backgroundPosition = 'center';
+                }
+            } else {
+                // 移除图片时，恢复原始原貌
+                if (holder.tagName === 'IMG') {
+                    var origImg = APP_ICON_EL.querySelector('img');
+                    if (origImg && origImg !== holder) origImg.removeAttribute('src');
+                    holder.removeAttribute('src'); 
+                } else if (holder.tagName !== 'SVG') {
+                    holder.style.backgroundImage = 'none';
+                }
+                if (ORIGINAL_APP_HTML && APP_ICON_EL) {
+                    // 如果有原始备份且需要恢复，可以重新把内容塞回去（视原网页结构而定）
+                    // 这里为了极简，不强求全部 innerHTML 重置，依靠CSS清理已经够了
+                }
             }
-        } catch (e) {}
+        }
       }
     }, 'applyAppearance');
   }
@@ -741,7 +823,12 @@
     h += '<div class="ma-set-block"><div class="ma-set-title">悬浮球外观</div><div class="ma-row"><span class="ma-label" style="width:52px;">颜色</span><input type="color" id="ma-set-color" value="' + esc(s.ballColor) + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.ballColor) + '</span></div>';
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">大小</span><input type="range" class="ma-range" id="ma-set-size" min="36" max="88" step="1" value="' + s.ballSize + '"><span class="ma-label" id="ma-set-size-val" style="width:44px;text-align:right;">' + s.ballSize + 'px</span></div>';
     h += '<div class="ma-row"><div class="ma-thumb" id="ma-set-ball-thumb" style="' + (s.ballImage ? 'background-image:url(&quot;' + s.ballImage + '&quot;);' : 'background:' + esc(s.ballColor) + ';') + '"></div><button class="ma-btn sm" id="ma-set-ball-upload">上传图片</button>' + (s.ballImage ? '<button class="ma-btn sm danger" id="ma-set-ball-clear">移除</button>' : '') + '</div></div>';
-    h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div><div class="ma-row"><div class="ma-thumb square" id="ma-set-app-thumb" style="' + (s.appImage ? 'background-image:url(&quot;' + s.appImage + '&quot;);' : 'background:#f5f5f5;') + '"></div><button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>' + (s.appImage ? '<button class="ma-btn sm danger" id="ma-set-app-clear">移除</button>' : '') + '</div></div>';
+    
+    h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div>';
+    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">名称</span><input type="text" class="ma-input" id="ma-set-app-name" maxlength="6" value="' + esc(s.appName || '审核') + '"></div>';
+    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#333333') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.appColor) + '</span></div>';
+    h += '<div class="ma-row"><div class="ma-thumb square" id="ma-set-app-thumb" style="' + (s.appImage ? 'background-image:url(&quot;' + s.appImage + '&quot;);' : 'background:#f5f5f5;') + '"></div><button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>' + (s.appImage ? '<button class="ma-btn sm danger" id="ma-set-app-clear">移除</button>' : '') + '</div></div>';
+    
     h += '<div class="ma-set-block"><div class="ma-set-title">入口显示</div><div class="ma-row" style="justify-content:space-between;"><div><div style="font-size:13px;">隐藏悬浮球</div><div style="font-size:11px;color:#aaa;">开启后悬浮球消失，需点击原生“审核”图标进入面板关闭此开关</div></div><div class="ma-switch' + (s.hideAll ? ' on' : '') + '" id="ma-set-hide"></div></div></div>';
     h += '<div class="ma-set-block"><div class="ma-set-title">数据备份</div><div class="ma-row wrap"><button class="ma-btn" id="ma-export">导出备份</button><button class="ma-btn danger" id="ma-import">导入备份</button><input type="file" id="ma-import-file" accept=".json" style="display:none;"></div></div>';
     return h;
@@ -749,53 +836,27 @@
 
   function bindSettingsEvents(body) {
     safe(function () {
-      var c = body.querySelector('#ma-set-color'); if (c) { c.addEventListener('input', function () { safe(function () { DB.settings.ballColor = c.value; var t = body.querySelector('#ma-set-ball-thumb'); if (t && !DB.settings.ballImage) t.style.background = c.value; applyAppearance(); }, 'colorIn'); }); c.addEventListener('change', function () { saveData(); applyAppearance(); }); }
+      var c = body.querySelector('#ma-set-color'); if (c) { c.addEventListener('input', function () { safe(function () { DB.settings.ballColor = c.value; var t = body.querySelector('#ma-set-ball-thumb'); if (t && !DB.settings.ballImage) t.style.background = c.value; applyAppearance(); }, 'colorIn'); }); c.addEventListener('change', function () { saveData(); applyAppearance(); renderPanelBody(); }); }
       var sz = body.querySelector('#ma-set-size'), szv = body.querySelector('#ma-set-size-val'); if (sz) { sz.addEventListener('input', function () { safe(function () { var v = clamp(parseInt(sz.value, 10) || 52, 36, 88); DB.settings.ballSize = v; if (szv) szv.textContent = v + 'px'; applyAppearance(); applyFabPosition(); }, 'sizeIn'); }); sz.addEventListener('change', function () { saveData(); }); }
+      var bu = body.querySelector('#ma-set-ball-upload'); if (bu) bu.addEventListener('click', function () { openCropper({ title: '裁剪悬浮球', shape: 'circle', onConfirm: function (d) { safe(function () { DB.settings.ballImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'ballImg'); } }); });
+      var bc = body.querySelector('#ma-set-ball-clear'); if (bc) bc.addEventListener('click', function () { safe(function () { DB.settings.ballImage = ''; saveData(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'ballClr'); });
       
-      var bu = body.querySelector('#ma-set-ball-upload'); 
-      if (bu) bu.addEventListener('click', function () { openCropper({ title: '裁剪悬浮球', shape: 'circle', onConfirm: function (d) { safe(function () { DB.settings.ballImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'ballImg'); } }); });
+      var appNameInp = body.querySelector('#ma-set-app-name'); if (appNameInp) {
+        appNameInp.addEventListener('input', function () { safe(function () { DB.settings.appName = appNameInp.value.trim() || '审核'; applyAppearance(); }, 'appNameIn'); });
+        appNameInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
+      }
+      var appColorInp = body.querySelector('#ma-set-app-color'); if (appColorInp) {
+        appColorInp.addEventListener('input', function () { safe(function () { DB.settings.appColor = appColorInp.value; applyAppearance(); }, 'appColorIn'); });
+        appColorInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
+      }
       
-      var bc = body.querySelector('#ma-set-ball-clear'); 
-      if (bc) bc.addEventListener('click', function () { 
-          safe(function () { 
-              DB.settings.ballImage = ''; 
-              saveData(); 
-              applyAppearance(); 
-              var t = body.querySelector('#ma-set-ball-thumb'); 
-              if (t) { t.style.backgroundImage = ''; t.style.background = DB.settings.ballColor; }
-              bc.style.display = 'none';
-              toast('已移除悬浮球图片'); 
-          }, 'ballClr'); 
-      });
-      
-      var au = body.querySelector('#ma-set-app-upload'); 
-      if (au) au.addEventListener('click', function () { openCropper({ title: '裁剪图标', shape: 'square', onConfirm: function (d) { safe(function () { DB.settings.appImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'appImg'); } }); });
-      
-      var ac = body.querySelector('#ma-set-app-clear'); 
-      if (ac) ac.addEventListener('click', function () { 
-          safe(function () { 
-              DB.settings.appImage = ''; 
-              saveData(); 
-              
-              // 彻底恢复原生图标状态
-              if (APP_ICON_EL) APP_ICON_EL.style.backgroundImage = '';
-              if (APP_ICON_IMG_EL) {
-                  if (APP_ICON_IMG_EL.tagName === 'IMG') APP_ICON_IMG_EL.removeAttribute('src');
-                  else APP_ICON_IMG_EL.style.backgroundImage = '';
-              }
-              
-              // 局部更新 UI
-              var t = body.querySelector('#ma-set-app-thumb'); 
-              if (t) { t.style.backgroundImage = ''; t.style.background = '#f5f5f5'; }
-              ac.style.display = 'none';
-              toast('已恢复默认审核图标'); 
-          }, 'appClr'); 
-      });
+      var au = body.querySelector('#ma-set-app-upload'); if (au) au.addEventListener('click', function () { openCropper({ title: '裁剪图标', shape: 'square', onConfirm: function (d) { safe(function () { DB.settings.appImage = d; saveData(); applyAppearance(); renderPanelBody(); toast('已更新'); }, 'appImg'); } }); });
+      var ac = body.querySelector('#ma-set-app-clear'); if (ac) ac.addEventListener('click', function () { safe(function () { DB.settings.appImage = ''; saveData(); applyAppearance(); renderPanelBody(); toast('已移除'); }, 'appClr'); });
       
       var hd = body.querySelector('#ma-set-hide'); if (hd) hd.addEventListener('click', function () { safe(function () { DB.settings.hideAll = !DB.settings.hideAll; saveData(); hd.classList.toggle('on', DB.settings.hideAll); applyVisibility(); toast(DB.settings.hideAll ? '悬浮球已隐藏，可通过原生图标恢复' : '悬浮球已恢复'); }, 'hideSet'); });
       
       var exp = body.querySelector('#ma-export'); if (exp) exp.addEventListener('click', function () { safe(function () { var blob = new Blob([JSON.stringify({ __ma_backup: true, exportedAt: Date.now(), data: DB }, null, 2)], { type: 'application/json' }); var url = URL.createObjectURL(blob), a = document.createElement('a'), d = new Date(); a.href = url; a.download = 'audit-backup-' + d.getTime() + '.json'; document.body.appendChild(a); a.click(); setTimeout(function () { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e) {} }, 200); toast('已导出'); }, 'export'); });
-      var imp = body.querySelector('#ma-import'), impf = body.querySelector('#ma-import-file'); if (imp && impf) { imp.addEventListener('click', function () { impf.click(); }); impf.addEventListener('change', function () { safe(function () { var f = impf.files && impf.files[0]; if (!f) return; var fr = new FileReader(); fr.onload = function () { safe(function () { var obj = JSON.parse(fr.result), inc = obj && obj.__ma_backup ? obj.data : obj; if (!inc) { toast('格式错误'); return; } confirmModal({ title: '确认导入', body: '将覆盖当前所有数据，是否继续？', danger: true, okText: '覆盖', onOk: function () { safe(function () { DB = normalizeData(inc); saveData(); applyAppearance(); applyFabPosition(); applyVisibility(); refreshAppIcon(); renderTabs(); renderPanelBody(); updateBadge(); toast('导入成功'); }, 'impApply'); } }); }, 'impParse'); }; fr.readAsText(f, 'utf-8'); }, 'impChange'); }); }
+      var imp = body.querySelector('#ma-import'), impf = body.querySelector('#ma-import-file'); if (imp && impf) { imp.addEventListener('click', function () { impf.click(); }); impf.addEventListener('change', function () { safe(function () { var f = impf.files && impf.files[0]; if (!f) return; var fr = new FileReader(); fr.onload = function () { safe(function () { var obj = JSON.parse(fr.result), inc = obj && obj.__ma_backup ? obj.data : obj; if (!inc) { toast('格式错误'); return; } confirmModal({ title: '确认导入', body: '将覆盖当前所有数据，是否继续？', danger: true, okText: '覆盖', onOk: function () { safe(function () { DB = normalizeData(inc); saveData(); applyAppearance(); applyFabPosition(); applyVisibility(); renderTabs(); renderPanelBody(); updateBadge(); toast('导入成功'); }, 'impApply'); } }); }, 'impParse'); }; fr.readAsText(f, 'utf-8'); }, 'impChange'); }); }
     }, 'bindSetEvents');
   }
 
@@ -850,15 +911,20 @@
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; FAB.style.left = clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)) + 'px'; FAB.style.top = clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) + 'px'; }, 'resize'); }); }
     
-    startAppIconRAF(); // 核心修复：requestAnimationFrame 极限同步
+    startAppIconObserver(); // 极速监听注入
     startEngine(); 
     startGuard();
     
+    // 针对聊天室的轻量补全
+    let lastChatCheck = 0;
     setInterval(function() {
+        let now = Date.now();
+        if (now - lastChatCheck < 500) return;
         if (document.getElementById('chat-body')) {
             checkAndRepairChat();
         }
-    }, 1000);
+        lastChatCheck = now;
+    }, 500);
 
     if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已强制唤醒'); }, 'forceTo'); }
     
