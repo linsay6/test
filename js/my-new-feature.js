@@ -1,5 +1,6 @@
 /* ============================================================================
- * my-new-feature.js 终极调试版
+ * my-new-feature.js 终极完美版
+ * 修复：1. 启用/禁用逻辑反转 2. 增加分组全选 3. 过滤复杂气泡，确保克隆普通文字气泡
  * ========================================================================== */
 (function () {
   'use strict';
@@ -65,17 +66,35 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
+  /* 核心修复：过滤复杂分析卡片 */
   function injectBubbleToChat(text) {
     try {
       var msgs = readChatMsgs(); msgs.push({ side: 'in', text: text, time: Date.now() }); writeChatMsgs(msgs);
       var chatBody = document.getElementById('chat-body');
       if (!chatBody) { console.warn('[审计] 找不到 #chat-body'); return false; }
       var children = Array.from(chatBody.children), templateNode = null;
+      
+      // 第一遍：寻找干净的普通文字气泡（跳过复杂的分析卡片）
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
-        if (el.textContent && el.textContent.trim().length > 0) { templateNode = el; break; }
+        var txt = el.textContent || '';
+        // 过滤掉带词典解析、情绪、意图的复杂节点
+        if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0 || txt.indexOf('情绪 ') >= 0 || txt.indexOf('多字卡回复') >= 0) {
+            continue; 
+        }
+        if (txt.trim().length > 0) { templateNode = el; break; }
       }
+
+      // 第二遍兜底：如果原网页全是复杂卡片，那没办法只能硬克隆最后一条了
+      if (!templateNode) {
+        for (var i = children.length - 1; i >= 0; i--) {
+          var el = children[i], cls = (el.className || '').toLowerCase();
+          if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
+          if (el.textContent && el.textContent.trim().length > 0) { templateNode = el; break; }
+        }
+      }
+
       if (!templateNode) { console.warn('[审计] 找不到可克隆的对方气泡节点'); return false; }
       var clone = templateNode.cloneNode(true);
       if (clone.id) clone.removeAttribute('id');
@@ -370,7 +389,10 @@
     if (!DB.groups.length) return h + '<div class="ma-empty">暂无分类</div>';
     for (var i = 0; i < DB.groups.length; i++) {
       var g = DB.groups[i], gDis = (g.disabledBy || []).length > 0, isOpen = OPEN_GROUPS[g.id] !== false;
-      h += '<div class="ma-group' + (isOpen ? ' open' : '') + '" data-gid="' + esc(g.id) + '"><div class="ma-group-head"><div class="ma-group-title"><span class="ma-arrow">▶</span><span class="name">' + esc(g.name) + '</span><span class="ma-group-cnt">(' + g.cards.length + ')</span>' + (gDis ? '<span class="ma-badge-dis user" style="font-size:10px;">分组已禁用</span>' : '') + '</div><div class="ma-group-tools" style="flex-wrap:wrap;justify-content:flex-end;">';
+      h += '<div class="ma-group' + (isOpen ? ' open' : '') + '" data-gid="' + esc(g.id) + '"><div class="ma-group-head"><div class="ma-group-title"><span class="ma-arrow">▶</span>';
+      // 新增：分组全选复选框
+      h += '<input type="checkbox" class="ma-group-select" data-gid="' + esc(g.id) + '" style="margin:0 2px 0 4px;cursor:pointer;" onclick="event.stopPropagation();">';
+      h += '<span class="name">' + esc(g.name) + '</span><span class="ma-group-cnt">(' + g.cards.length + ')</span>' + (gDis ? '<span class="ma-badge-dis user" style="font-size:10px;">分组已禁用</span>' : '') + '</div><div class="ma-group-tools" style="flex-wrap:wrap;justify-content:flex-end;">';
       h += '<button class="ma-btn sm" data-gact="rename" data-gid="' + esc(g.id) + '">重命名</button><button class="ma-btn sm" data-gact="up" data-gid="' + esc(g.id) + '">↑</button><button class="ma-btn sm" data-gact="down" data-gid="' + esc(g.id) + '">↓</button><button class="ma-btn sm" data-gact="toggle" data-gid="' + esc(g.id) + '">' + (gDis ? '启用' : '禁用') + '</button><button class="ma-btn sm danger" data-gact="delete" data-gid="' + esc(g.id) + '">删除</button></div></div><div class="ma-group-body">';
       
       if (!g.cards.length) h += '<div class="ma-empty" style="padding:18px 10px;">该分类暂无字卡</div>';
@@ -401,8 +423,7 @@
       if (subBtn && manInput) {
         subBtn.addEventListener('click', function () {
           safe(function () {
-            var txt = String(manInput.value || '').trim();
-            if (!txt) { toast('请输入内容'); return; }
+            var txt = String(manInput.value || '').trim(); if (!txt) { toast('请输入内容'); return; }
             DB.pending.push({ id: uid('p'), action: 'add', text: txt, cardId: '', fromGroupId: '', fromGroupName: '', toGroupId: manGroup ? manGroup.value : '', toGroupName: '', sender: SENDER_ME, auto: false, time: Date.now(), status: 'pending', note: '我手动提交的申请' });
             saveData(); toast('已提交审核'); manInput.value = ''; renderPanelBody(); updateBadge();
           }, 'manualSubmit');
@@ -415,9 +436,48 @@
       eachNode(body, '.ma-group-head', function (head) { head.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-gact]')) return; var grp = head.parentNode, gid = grp.getAttribute('data-gid'); var isOpen = grp.classList.toggle('open'); if (OPEN_GROUPS) OPEN_GROUPS[gid] = isOpen; }); });
       eachNode(body, '[data-cact]', function (btn) { btn.addEventListener('click', function (e) { e.stopPropagation(); safe(function () { handleCardAction(btn.getAttribute('data-cact'), btn.getAttribute('data-cid')); }, 'cardAct'); }); });
       
-      function updCount() { var n = 0, total = 0; eachNode(body, '.ma-card-check', function (cb) { total++; if (cb.checked) n++; }); var el = body.querySelector('#ma-sel-count'); if (el) el.textContent = '已选 ' + n + ' 个'; var all = body.querySelector('#ma-sel-all'); if (all) all.checked = (n > 0 && n === total); }
-      var selAll = body.querySelector('#ma-sel-all'); if (selAll) selAll.addEventListener('change', function () { eachNode(body, '.ma-card-check', function (cb) { cb.checked = selAll.checked; }); updCount(); });
+      // 监听卡片勾选，同步更新全局与分组全选状态
+      function updCount() {
+        var n = 0, total = 0;
+        eachNode(body, '.ma-card-check', function (cb) { total++; if (cb.checked) n++; });
+        var el = body.querySelector('#ma-sel-count'); if (el) el.textContent = '已选 ' + n + ' 个';
+        var all = body.querySelector('#ma-sel-all'); if (all) all.checked = (n > 0 && n === total);
+        
+        // 更新分组复选框状态
+        eachNode(body, '.ma-group', function (grp) {
+          var gcb = grp.querySelector('.ma-group-select'); if (!gcb) return;
+          var cards = grp.querySelectorAll('.ma-card-check');
+          var allChecked = cards.length > 0;
+          var anyChecked = false;
+          for (var i = 0; i < cards.length; i++) { if (cards[i].checked) anyChecked = true; else allChecked = false; }
+          gcb.checked = allChecked;
+          gcb.indeterminate = anyChecked && !allChecked; // 半选状态
+        });
+      }
+
+      // 绑定全局全选
+      var selAll = body.querySelector('#ma-sel-all'); 
+      if (selAll) selAll.addEventListener('change', function () { 
+          eachNode(body, '.ma-card-check', function (cb) { cb.checked = selAll.checked; }); 
+          updCount(); 
+      });
+
+      // 绑定卡片单选
       eachNode(body, '.ma-card-check', function (cb) { cb.addEventListener('change', updCount); });
+
+      // 绑定分组全选
+      eachNode(body, '.ma-group-select', function (cb) {
+        cb.addEventListener('change', function (e) {
+          e.stopPropagation();
+          var gid = cb.getAttribute('data-gid');
+          var grp = body.querySelector('.ma-group[data-gid="' + gid + '"]');
+          if (!grp) return;
+          var isChecked = cb.checked;
+          eachNode(grp, '.ma-card-check', function (cardCb) { cardCb.checked = isChecked; });
+          updCount();
+        });
+      });
+
       var bulkDel = body.querySelector('#ma-bulk-del'); if (bulkDel) bulkDel.addEventListener('click', function () { safe(function () { var cids = []; eachNode(body, '.ma-card-check', function (cb) { if (cb.checked) cids.push(cb.getAttribute('data-cid')); }); if (!cids.length) { toast('请先勾选'); return; } confirmModal({ title: '批量删除', body: '确定删除选中的 ' + cids.length + ' 张字卡？', danger: true, okText: '删除', onOk: function () { safe(function () { for (var i = 0; i < cids.length; i++) { var f = findCard(cids[i]); if (f) f.group.cards = f.group.cards.filter(function (x) { return x.id !== f.card.id; }); } saveData(); renderPanelBody(); toast('已删除'); }, 'bulkDelApply'); } }); }, 'bulkDel'); });
       var bulkMove = body.querySelector('#ma-bulk-move'), bulkTarget = body.querySelector('#ma-bulk-target'); if (bulkMove && bulkTarget) bulkMove.addEventListener('click', function () { safe(function () { var tid = bulkTarget.value; if (!tid) { toast('请选择目标'); return; } var tgt = findGroup(tid); if (!tgt) return; var cids = []; eachNode(body, '.ma-card-check', function (cb) { if (cb.checked) cids.push(cb.getAttribute('data-cid')); }); if (!cids.length) { toast('请先勾选'); return; } var moved = 0; for (var i = 0; i < cids.length; i++) { var f = findCard(cids[i]); if (f && f.group.id !== tid) { f.group.cards = f.group.cards.filter(function (x) { return x.id !== f.card.id; }); tgt.cards.push(f.card); moved++; } } saveData(); renderPanelBody(); toast(moved ? '已转移 ' + moved + ' 张' : '无需转移'); }, 'bulkMove'); });
     }, 'bindCardsEvents');
@@ -438,11 +498,23 @@
     }
   }
 
+  // 核心修复：启禁用逻辑反转
   function handleCardAction(act, cid) {
     var f = findCard(cid); if (!f) return; var card = f.card;
     if (act === 'edit') { confirmModal({ title: '编辑字卡', html: '<textarea class="ma-textarea" id="ma-edit-input" maxlength="500">' + esc(card.text) + '</textarea>', okText: '保存', onOk: function () { safe(function () { var i = document.getElementById('ma-edit-input'); if (!i) return; var v = String(i.value || '').trim(); if (!v) { toast('不能为空'); return; } card.text = v; saveData(); renderPanelBody(); toast('已保存'); }, 'editApply'); } }); setTimeout(function () { try { var i = document.getElementById('ma-edit-input'); if (i) i.focus(); } catch (e) {} }, 50); return; }
     if (act === 'send') { safe(function () { sendCardToChat(cid); }, 'sendCard'); return; }
-    if (act === 'toggle') { if (!Array.isArray(card.disabledBy)) card.disabledBy = []; if (card.disabledBy.indexOf('user') >= 0) card.disabledBy = card.disabledBy.filter(function (x) { return x !== 'user'; }); else card.disabledBy.push('user'); saveData(); renderPanelBody(); return; }
+    
+    if (act === 'toggle') { 
+        if (!Array.isArray(card.disabledBy)) card.disabledBy = []; 
+        // 修复：只要有禁用状态，点击就全部清空（彻底启用）。如果无禁用状态，则添加 user 禁用。
+        if (card.disabledBy.length > 0) {
+            card.disabledBy = [];
+        } else {
+            card.disabledBy.push('user');
+        }
+        saveData(); renderPanelBody(); return; 
+    }
+    
     if (act === 'delete') { confirmModal({ title: '删除字卡', body: '确定删除？', danger: true, okText: '删除', onOk: function () { safe(function () { f.group.cards = f.group.cards.filter(function (x) { return x.id !== cid; }); saveData(); renderPanelBody(); toast('已删除'); }, 'delCardApply'); } }); return; }
   }
 
@@ -533,7 +605,6 @@
     startAppIconWatcher(); startEngine(); startGuard();
     if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已强制唤醒'); }, 'forceTo'); }
     
-    // 终极调试接口
     try {
       window.__MY_AUDIT__ = { 
         tick: function() { tickEngine(); }, 
@@ -541,23 +612,14 @@
         reload: function() { DB = loadData(); if (PANEL_OPEN) renderPanelBody(); updateBadge(); toast('数据已重新加载'); },
         injectTest: function() {
           if (!DB || !DB.groups.length || !DB.groups[0].cards.length) { toast('请先创建至少一个分类和一张字卡'); return; }
-          var g1 = DB.groups[0];
-          var g2 = DB.groups[1] || g1;
-          var c1 = g1.cards[0];
-          var c2 = g1.cards[1] || c1;
-          var now = Date.now();
+          var g1 = DB.groups[0], g2 = DB.groups[1] || g1, c1 = g1.cards[0], c2 = g1.cards[1] || c1, now = Date.now();
           DB.pending.push({ id: 't1_'+now, action: 'delete', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, sender: '梦角', time: now, status: 'pending', note: '梦角的捣乱测试：想删除这张卡' });
           DB.pending.push({ id: 't2_'+now, action: 'disable', text: c2.text, cardId: c2.id, fromGroupId: g1.id, fromGroupName: g1.name, sender: '梦角', time: now, status: 'pending', note: '梦角的捣乱测试：想禁用这张卡' });
-          if (DB.groups.length > 1) {
-            DB.pending.push({ id: 't3_'+now, action: 'move', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, toGroupId: g2.id, toGroupName: g2.name, sender: '梦角', time: now, status: 'pending', note: '梦角的整理测试：想迁移到[' + g2.name + ']' });
-          }
+          if (DB.groups.length > 1) DB.pending.push({ id: 't3_'+now, action: 'move', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, toGroupId: g2.id, toGroupName: g2.name, sender: '梦角', time: now, status: 'pending', note: '梦角的整理测试：想迁移到[' + g2.name + ']' });
           DB.pending.push({ id: 't4_'+now, action: 'enable', text: c1.text, cardId: c1.id, fromGroupId: g1.id, fromGroupName: g1.name, sender: '梦角', time: now, status: 'pending', note: '梦角的整理测试：想恢复启用' });
-          saveData();
-          if (PANEL_OPEN) { renderPanelBody(); updateBadge(); }
-          toast('测试数据已成功注入');
+          saveData(); if (PANEL_OPEN) { renderPanelBody(); updateBadge(); } toast('测试数据已成功注入');
         }
       };
-      console.log('[审计] 调试接口已挂载！你可以执行 __MY_AUDIT__.injectTest() 来测试审批');
     } catch (e) {}
   }
 
