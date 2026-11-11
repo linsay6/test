@@ -1,7 +1,6 @@
 /* ============================================================================
- * my-new-feature.js 终极完美版
- * 修复：1. 防消息覆盖 2. 强制自建纯文本气泡 3. 角标样式同步 
- *       4. 并发锁彻底锁死 5. 空角标隐藏 6. MutationObserver极速加载
+ * my-new-feature.js 性能极致版
+ * 修复：1. 解决加载严重卡顿（废弃重度Observer） 2. 角标样式继承原网页 3. 彻底隐藏空角标
  * ========================================================================== */
 (function () {
   'use strict';
@@ -20,9 +19,9 @@
 
   var DB = null, ROOT = null, FAB = null, MASK = null, PANEL = null;
   var CURRENT_TAB = 'pending', PANEL_OPEN = false, URL_FORCE_SHOW = false;
-  var APP_ICON_EL = null, APP_ICON_IMG_EL = null, appIconObserver = null;
+  var APP_ICON_EL = null, APP_ICON_IMG_EL = null;
   var OPEN_GROUPS = null;
-  var INJECTED_MSGS = []; // 记录我们注入的消息，防止被覆盖
+  var INJECTED_MSGS = []; 
 
   function safe(fn, name, def) { try { return fn(); } catch (err) { try { console.warn('[审计] ' + (name || 'task') + ' 出错：', err); } catch (e2) {} return def; } }
   function uid(prefix) { return (prefix || 'id') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
@@ -35,21 +34,25 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
-  /* --- 核心修复 1：拦截 setItem，防止原网页覆盖我们的聊天记录 --- */
+  /* --- 性能保护：拦截 localStorage 防覆盖，但不引起卡顿 --- */
   (function hookLocalStorage() {
     try {
       var originalSetItem = localStorage.setItem;
       localStorage.setItem = function (key, value) {
-        if (key === LS_KEY_CHAT && INJECTED_MSGS.length > 0) {
+        if (key === LS_KEY_CHAT && INJECTED_MSGS.length > 0 && typeof value === 'string') {
           try {
-            var msgs = JSON.parse(value);
-            if (Array.isArray(msgs)) {
-              for (var i = 0; i < INJECTED_MSGS.length; i++) {
-                var im = INJECTED_MSGS[i];
-                var exists = msgs.some(function (m) { return m.text === im.text && m.time === im.time; });
-                if (!exists) msgs.push(im);
+            var lastMsg = INJECTED_MSGS[INJECTED_MSGS.length - 1];
+            // 快速字符串检查，避免深度解析 JSON
+            if (value.indexOf(lastMsg.text) === -1) {
+              var msgs = JSON.parse(value);
+              if (Array.isArray(msgs)) {
+                for (var i = 0; i < INJECTED_MSGS.length; i++) {
+                  var im = INJECTED_MSGS[i];
+                  var exists = msgs.some(function (m) { return m.text === im.text && m.time === im.time; });
+                  if (!exists) msgs.push(im);
+                }
+                value = JSON.stringify(msgs);
               }
-              value = JSON.stringify(msgs);
             }
           } catch (e) {}
         }
@@ -59,7 +62,7 @@
   })();
 
   function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', hideAll: false, ballPos: null }; }
-  function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0 } }; }
+  function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0, isGrabbing: false } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
     if (!Array.isArray(d.groups)) d.groups = [];
@@ -80,7 +83,7 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
-    if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta; if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0; if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0; if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = []; if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400);
+    if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta; if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0; if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0; if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = []; if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400); if (typeof d.meta.isGrabbing !== 'boolean') d.meta.isGrabbing = false;
     return d;
   }
   function loadData() { return safe(function () { var raw = localStorage.getItem(LS_KEY_DATA); if (!raw) return defaultData(); return normalizeData(JSON.parse(raw)); }, 'loadData', defaultData()); }
@@ -90,23 +93,18 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  /* --- 核心修复 2：绝对安全的极简气泡注入 --- */
   function injectBubbleToChat(text) {
     try {
       var now = Date.now();
       var newMsg = { side: 'in', text: text, time: now };
-      
-      // 记录到全局，防覆盖
-      INJECTED_MSGS.push(newMsg);
-      if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
+      INJECTED_MSGS.push(newMsg); if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
 
       var msgs = readChatMsgs(); msgs.push(newMsg); 
       localStorage.setItem(LS_KEY_CHAT, JSON.stringify(msgs));
       
       var chatBody = document.getElementById('chat-body');
-      if (!chatBody) { console.warn('[审计] 找不到 #chat-body，稍后进入聊天页会补发'); return true; }
+      if (!chatBody) return true;
 
-      // 过滤黑名单
       var blackList = ['语音', '通话', '红包', '领取', '撤回', '礼物', '转账', '词典', '连发', '情绪', '心意', '意图'];
       var templateNode = null;
       var children = Array.from(chatBody.children);
@@ -115,33 +113,24 @@
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0) continue;
         var txt = el.textContent || '';
-        
         var isBlack = false;
         for (var b = 0; b < blackList.length; b++) { if (txt.indexOf(blackList[b]) >= 0) { isBlack = true; break; } }
         if (isBlack) continue; 
-
-        // 确保它是包含文字的纯结构
         if (el.querySelector('.app-name, .icon, img, svg') && txt.trim().length < 5) continue;
-
-        templateNode = el;
-        break;
+        templateNode = el; break;
       }
 
       var bubbleEl;
       if (templateNode) {
-          // 找到干净的节点，克隆并替换
           bubbleEl = templateNode.cloneNode(true);
           if (bubbleEl.id) bubbleEl.removeAttribute('id');
           var nodesWithId = bubbleEl.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
           if (bubbleEl.classList) { bubbleEl.classList.remove('msg-out', 'me', 'right', 'self'); bubbleEl.classList.add('msg-in', 'left'); }
           bubbleEl.style.alignSelf = 'flex-start'; bubbleEl.style.marginLeft = '0'; bubbleEl.style.marginRight = 'auto';
-          
           var walker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
           while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
-          if (targetTextNode) targetTextNode.nodeValue = text;
-          else bubbleEl.innerText = text;
+          if (targetTextNode) targetTextNode.nodeValue = text; else bubbleEl.innerText = text;
       } else {
-          // 兜底：直接生成极简气泡
           bubbleEl = document.createElement('div');
           bubbleEl.className = 'msg in left';
           bubbleEl.style.cssText = 'display:flex; margin: 10px 15px; align-self: flex-start; clear: both;';
@@ -155,23 +144,16 @@
       chatBody.appendChild(bubbleEl);
       try { chatBody.scrollTop = chatBody.scrollHeight; window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
       return true;
-    } catch (err) { console.warn('[审计] 注入气泡异常：', err); return false; }
+    } catch (err) { return false; }
   }
 
-  // 进入聊天页面时，补齐我们的消息
   function checkAndRepairChat() {
     var chatBody = document.getElementById('chat-body');
     if (!chatBody || INJECTED_MSGS.length === 0) return;
-    
-    // 检查 DOM 里是否有我们注入的节点
     var injectedNodes = chatBody.querySelectorAll('[data-ma-injected="1"]');
     if (injectedNodes.length === INJECTED_MSGS.length) return;
-
-    // 如果有丢失，全部清除，重新按顺序注入（简单粗暴且有效）
-    for (var i = 0; i < injectedNodes.length; i++) {
-        injectedNodes[i].remove();
-    }
     
+    for (var i = 0; i < injectedNodes.length; i++) injectedNodes[i].remove();
     var blackList = ['语音', '通话', '红包', '领取', '撤回', '礼物', '转账', '词典', '连发', '情绪', '心意', '意图'];
     var templateNode = null;
     var children = Array.from(chatBody.children);
@@ -197,8 +179,7 @@
             bubbleEl.style.alignSelf = 'flex-start'; bubbleEl.style.marginLeft = '0'; bubbleEl.style.marginRight = 'auto';
             var walker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
             while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
-            if (targetTextNode) targetTextNode.nodeValue = msg.text;
-            else bubbleEl.innerText = msg.text;
+            if (targetTextNode) targetTextNode.nodeValue = msg.text; else bubbleEl.innerText = msg.text;
         } else {
             bubbleEl = document.createElement('div');
             bubbleEl.className = 'msg in left';
@@ -221,7 +202,6 @@
     safe(function () {
       if (!DB || DB.meta.isGrabbing) return;
       if (autoPendingCount() >= MAX_AUTO_PENDING) return;
-      
       DB.meta.isGrabbing = true;
       try {
         var msgs = readChatMsgs(), now = Date.now(), cands = [];
@@ -286,9 +266,12 @@
         '#ma-fab{position:fixed;z-index:' + (Z_BASE + 10) + ';display:flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-size:13px;font-weight:700;cursor:pointer;user-select:none;background-color:#ff6b81;background-size:cover;background-position:center;box-shadow:none;border:none;touch-action:none;}',
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
+        
+        /* 核心修复 1：角标样式微调与空状态彻底隐藏 */
         '#ma-app-icon{position:relative;cursor:pointer;}',
-        /* 核心修复 3：完美同步原作者角标样式：白底 黑字 细边 */
-        '#ma-app-icon .ma-app-dot{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 2px;border-radius:8px;background:#fff;display:none;align-items:center;justify-content:center;color:#333;font-size:10px;font-weight:500;border:1px solid #e0e0e0;box-shadow:0 1px 2px rgba(0,0,0,0.1);z-index:10;}','#ma-app-icon .ma-app-dot.on{display:flex;}',
+        '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff;display:none;align-items:center;justify-content:center;color:#333;font-size:11px;font-weight:600;border:1px solid #e0e0e0;box-shadow:0 1px 3px rgba(0,0,0,0.15);z-index:10;box-sizing:border-box;transform:scale(0.95);}',
+        '#ma-app-icon .ma-app-dot.on{display:flex;}',
+        
         '#ma-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;}','#ma-mask.on{display:flex;}',
         '#ma-panel{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;font-size:14px;color:#222;box-shadow:0 12px 40px rgba(0,0,0,.22);}',
         '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;flex-shrink:0;}',
@@ -353,6 +336,7 @@
       try { var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false); var textNodes = [], tn; while ((tn = walker.nextNode())) textNodes.push(tn); for (var ti = 0; ti < textNodes.length; ti++) textNodes[ti].nodeValue = ''; } catch (e6) {}
       var nameEl = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
       if (nameEl) nameEl.textContent = '审核'; else { var span = document.createElement('div'); span.className = 'ma-clone-name'; span.textContent = '审核'; span.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;'; clone.appendChild(span); }
+      
       var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       try { APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]'); } catch (e11) {}
@@ -364,19 +348,18 @@
     }, 'injectAppIcon', false);
   }
 
-  /* 核心修复 4：使用 MutationObserver 极速同步加载图标 */
-  function startAppIconObserver() {
+  /* 核心修复 2：轻量级轮询，彻底告别卡顿 */
+  function startAppIconLightPolling() {
     safe(function () {
-      if (appIconObserver) return;
-      injectAppIcon();
-      
-      appIconObserver = new MutationObserver(function () {
-        if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) {
-          injectAppIcon();
+      if (injectAppIcon()) return; // 如果已经有了，直接跳过
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries++;
+        if (injectAppIcon() || tries > 50) {
+          clearInterval(timer);
         }
-      });
-      appIconObserver.observe(document.body, { childList: true, subtree: true });
-    }, 'startAppIconObserver');
+      }, 200);
+    }, 'startAppIconLightPolling');
   }
 
   function applyVisibility() {
@@ -425,7 +408,7 @@
       var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
       if (a) { 
         if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); } 
-        else { a.textContent = ''; a.classList.remove('on'); } /* 修复 5：彻底清空空角标 */
+        else { a.textContent = ''; a.classList.remove('on'); a.style.display = 'none'; } 
       } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
@@ -823,15 +806,17 @@
   function bootstrap() {
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; FAB.style.left = clamp(parseFloat(FAB.style.left), 4, Math.max(4, window.innerWidth - size - 4)) + 'px'; FAB.style.top = clamp(parseFloat(FAB.style.top), 4, Math.max(4, window.innerHeight - size - 4)) + 'px'; }, 'resize'); }); }
-    startAppIconObserver(); // 核心修复 6：用 MutationObserver 监听
+    
+    startAppIconLightPolling(); // 轻量级轮询，不卡顿
     startEngine(); 
     startGuard();
     
-    // 监听聊天界面的出现，并补全消息
-    var chatBodyObs = new MutationObserver(function(mutations) {
-        if (document.getElementById('chat-body')) checkAndRepairChat();
-    });
-    chatBodyObs.observe(document.body, { childList: true, subtree: true });
+    // 极轻量的页面切换监听，不使用 MutationObserver 深度监听，改用定时器检查
+    setInterval(function() {
+        if (document.getElementById('chat-body')) {
+            checkAndRepairChat();
+        }
+    }, 1000);
 
     if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已强制唤醒'); }, 'forceTo'); }
     
