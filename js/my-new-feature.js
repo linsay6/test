@@ -1,6 +1,6 @@
 /* ============================================================================
  * my-new-feature.js 终极完美版
- * 修复：1. 启用/禁用逻辑反转 2. 增加分组全选 3. 过滤复杂气泡，确保克隆普通文字气泡
+ * 修复：1. 红点变数字 2. 精准抓取完整消息行（带时间/头像） 3. 禁用逻辑反转
  * ========================================================================== */
 (function () {
   'use strict';
@@ -66,7 +66,7 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  /* 核心修复：过滤复杂分析卡片 */
+  /* 终极修复：智能抓取包含时间/头像的完整消息行 */
   function injectBubbleToChat(text) {
     try {
       var msgs = readChatMsgs(); msgs.push({ side: 'in', text: text, time: Date.now() }); writeChatMsgs(msgs);
@@ -74,24 +74,30 @@
       if (!chatBody) { console.warn('[审计] 找不到 #chat-body'); return false; }
       var children = Array.from(chatBody.children), templateNode = null;
       
-      // 第一遍：寻找干净的普通文字气泡（跳过复杂的分析卡片）
+      // 第一遍：寻找带有时间格式或头像的完整节点
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
         var txt = el.textContent || '';
-        // 过滤掉带词典解析、情绪、意图的复杂节点
-        if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0 || txt.indexOf('情绪 ') >= 0 || txt.indexOf('多字卡回复') >= 0) {
-            continue; 
+        if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0) continue;
+        
+        // 核心判断：有 HH:MM 时间格式 或 有 img/svg 头像
+        var hasTime = /\d{1,2}:\d{2}/.test(txt);
+        var hasAvatar = el.querySelector('img, svg, .avatar, [class*="avatar"]');
+        if ((hasTime || hasAvatar) && txt.trim().length > 0) {
+            templateNode = el; 
+            break;
         }
-        if (txt.trim().length > 0) { templateNode = el; break; }
       }
 
-      // 第二遍兜底：如果原网页全是复杂卡片，那没办法只能硬克隆最后一条了
+      // 第二遍兜底：如果上面没找到，说明原网页结构特殊，退化找普通文字节点
       if (!templateNode) {
         for (var i = children.length - 1; i >= 0; i--) {
           var el = children[i], cls = (el.className || '').toLowerCase();
           if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
-          if (el.textContent && el.textContent.trim().length > 0) { templateNode = el; break; }
+          var txt = el.textContent || '';
+          if (txt.indexOf('词典拼词') >= 0 || txt.indexOf('交流意图') >= 0) continue;
+          if (txt.trim().length > 0) { templateNode = el; break; }
         }
       }
 
@@ -99,9 +105,17 @@
       var clone = templateNode.cloneNode(true);
       if (clone.id) clone.removeAttribute('id');
       var nodesWithId = clone.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
+      
+      // 寻找最长的文本节点进行替换（保护时间、头像等不被修改）
       var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
-      while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
+      while ((tn = walker.nextNode())) { 
+          var len = tn.nodeValue.trim().length; 
+          // 跳过时间格式的节点
+          if (/^\d{1,2}:\d{2}$/.test(tn.nodeValue.trim())) continue;
+          if (len > maxLen) { maxLen = len; targetTextNode = tn; } 
+      }
       if (targetTextNode) targetTextNode.nodeValue = text; else clone.innerText = text;
+      
       chatBody.appendChild(clone);
       try { chatBody.scrollTop = chatBody.scrollHeight; if (chatBody.parentNode) chatBody.parentNode.scrollTop = chatBody.parentNode.scrollHeight; window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
       return true;
@@ -168,7 +182,9 @@
         '#ma-fab{position:fixed;z-index:' + (Z_BASE + 10) + ';display:flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-size:13px;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;cursor:pointer;user-select:none;background-color:#ff6b81;background-size:cover;background-position:center;background-repeat:no-repeat;box-shadow:none;border:none;outline:none;transition:transform .15s ease,opacity .2s ease;touch-action:none;overflow:visible;}',
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-1px;right:-1px;width:11px;height:11px;border-radius:50%;background:#ff2d55;display:none;pointer-events:none;}','#ma-fab .ma-fab-dot.on{display:block;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
-        '#ma-app-icon{position:relative;cursor:pointer;}','#ma-app-icon .ma-app-dot{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:#ff2d55;display:none;pointer-events:none;}','#ma-app-icon .ma-app-dot.on{display:block;}',
+        '#ma-app-icon{position:relative;cursor:pointer;}',
+        // 新增：原生图标的数字角标样式
+        '#ma-app-icon .ma-app-badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;color:#fff;font-size:10px;display:none;align-items:center;justify-content:center;font-weight:bold;border:1px solid #fff;box-sizing:border-box;}',
         '#ma-mask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:' + (Z_BASE + 100) + ';background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;}','#ma-mask.on{display:flex;}',
         '#ma-panel{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;color:#222;line-height:1.5;box-shadow:0 12px 40px rgba(0,0,0,.22);}',
         '.ma-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;}','.ma-title{font-size:16px;font-weight:700;}','.ma-close{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;color:#999;cursor:pointer;}','.ma-close:hover{background:#eee;color:#333;}',
@@ -233,7 +249,10 @@
       var nameEl = null; try { nameEl = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]'); } catch (e8) {}
       if (nameEl && !/^(IMG|SVG|CANVAS)$/i.test(nameEl.tagName || '')) nameEl.textContent = '审核';
       else { var span = document.createElement('div'); span.className = 'ma-clone-name'; span.textContent = '审核'; span.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; try { clone.appendChild(span); } catch (e9) {} }
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; try { clone.appendChild(dot); } catch (e10) {}
+      
+      // 修复：使用数字角标
+      var dot = document.createElement('i'); dot.className = 'ma-app-badge'; try { clone.appendChild(dot); } catch (e10) {}
+      
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       try { APP_ICON_IMG_EL = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]'); } catch (e11) { APP_ICON_IMG_EL = null; }
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone); else if (src.parentNode) src.parentNode.insertBefore(clone, src.nextSibling); else return false;
@@ -285,7 +304,25 @@
       } else if (APP_ICON_EL && !s.appImage && APP_ICON_IMG_EL) { try { if (APP_ICON_IMG_EL.tagName !== 'IMG' && APP_ICON_IMG_EL.tagName !== 'SVG') APP_ICON_IMG_EL.style.backgroundImage = ''; } catch (e2) {} }
     }, 'applyAppearance');
   }
-  function updateBadge() { safe(function () { var n = pendingCount(); var f = FAB ? FAB.querySelector('.ma-fab-dot') : null; if (f) { if (n > 0) f.classList.add('on'); else f.classList.remove('on'); } var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; if (a) { if (n > 0) a.classList.add('on'); else a.classList.remove('on'); } var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } }, 'updateBadge'); }
+  
+  // 修复：红点改成数字显示
+  function updateBadge() { 
+    safe(function () { 
+      var n = pendingCount(); 
+      
+      var f = FAB ? FAB.querySelector('.ma-fab-dot') : null; 
+      if (f) { if (n > 0) f.classList.add('on'); else f.classList.remove('on'); } 
+      
+      var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-badge') : null; 
+      if (a) { 
+        if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.style.display = 'flex'; } 
+        else { a.style.display = 'none'; } 
+      } 
+      
+      var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
+      if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
+    }, 'updateBadge'); 
+  }
 
   var TAB_DEF = [{ key: 'pending', label: '待审核' }, { key: 'cards', label: '字卡库' }, { key: 'history', label: '历史档案' }, { key: 'settings', label: '设置' }];
   function buildUI() {
@@ -390,7 +427,6 @@
     for (var i = 0; i < DB.groups.length; i++) {
       var g = DB.groups[i], gDis = (g.disabledBy || []).length > 0, isOpen = OPEN_GROUPS[g.id] !== false;
       h += '<div class="ma-group' + (isOpen ? ' open' : '') + '" data-gid="' + esc(g.id) + '"><div class="ma-group-head"><div class="ma-group-title"><span class="ma-arrow">▶</span>';
-      // 新增：分组全选复选框
       h += '<input type="checkbox" class="ma-group-select" data-gid="' + esc(g.id) + '" style="margin:0 2px 0 4px;cursor:pointer;" onclick="event.stopPropagation();">';
       h += '<span class="name">' + esc(g.name) + '</span><span class="ma-group-cnt">(' + g.cards.length + ')</span>' + (gDis ? '<span class="ma-badge-dis user" style="font-size:10px;">分组已禁用</span>' : '') + '</div><div class="ma-group-tools" style="flex-wrap:wrap;justify-content:flex-end;">';
       h += '<button class="ma-btn sm" data-gact="rename" data-gid="' + esc(g.id) + '">重命名</button><button class="ma-btn sm" data-gact="up" data-gid="' + esc(g.id) + '">↑</button><button class="ma-btn sm" data-gact="down" data-gid="' + esc(g.id) + '">↓</button><button class="ma-btn sm" data-gact="toggle" data-gid="' + esc(g.id) + '">' + (gDis ? '启用' : '禁用') + '</button><button class="ma-btn sm danger" data-gact="delete" data-gid="' + esc(g.id) + '">删除</button></div></div><div class="ma-group-body">';
@@ -436,14 +472,12 @@
       eachNode(body, '.ma-group-head', function (head) { head.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('[data-gact]')) return; var grp = head.parentNode, gid = grp.getAttribute('data-gid'); var isOpen = grp.classList.toggle('open'); if (OPEN_GROUPS) OPEN_GROUPS[gid] = isOpen; }); });
       eachNode(body, '[data-cact]', function (btn) { btn.addEventListener('click', function (e) { e.stopPropagation(); safe(function () { handleCardAction(btn.getAttribute('data-cact'), btn.getAttribute('data-cid')); }, 'cardAct'); }); });
       
-      // 监听卡片勾选，同步更新全局与分组全选状态
       function updCount() {
         var n = 0, total = 0;
         eachNode(body, '.ma-card-check', function (cb) { total++; if (cb.checked) n++; });
         var el = body.querySelector('#ma-sel-count'); if (el) el.textContent = '已选 ' + n + ' 个';
         var all = body.querySelector('#ma-sel-all'); if (all) all.checked = (n > 0 && n === total);
         
-        // 更新分组复选框状态
         eachNode(body, '.ma-group', function (grp) {
           var gcb = grp.querySelector('.ma-group-select'); if (!gcb) return;
           var cards = grp.querySelectorAll('.ma-card-check');
@@ -451,21 +485,18 @@
           var anyChecked = false;
           for (var i = 0; i < cards.length; i++) { if (cards[i].checked) anyChecked = true; else allChecked = false; }
           gcb.checked = allChecked;
-          gcb.indeterminate = anyChecked && !allChecked; // 半选状态
+          gcb.indeterminate = anyChecked && !allChecked;
         });
       }
 
-      // 绑定全局全选
       var selAll = body.querySelector('#ma-sel-all'); 
       if (selAll) selAll.addEventListener('change', function () { 
           eachNode(body, '.ma-card-check', function (cb) { cb.checked = selAll.checked; }); 
           updCount(); 
       });
 
-      // 绑定卡片单选
       eachNode(body, '.ma-card-check', function (cb) { cb.addEventListener('change', updCount); });
 
-      // 绑定分组全选
       eachNode(body, '.ma-group-select', function (cb) {
         cb.addEventListener('change', function (e) {
           e.stopPropagation();
@@ -498,7 +529,6 @@
     }
   }
 
-  // 核心修复：启禁用逻辑反转
   function handleCardAction(act, cid) {
     var f = findCard(cid); if (!f) return; var card = f.card;
     if (act === 'edit') { confirmModal({ title: '编辑字卡', html: '<textarea class="ma-textarea" id="ma-edit-input" maxlength="500">' + esc(card.text) + '</textarea>', okText: '保存', onOk: function () { safe(function () { var i = document.getElementById('ma-edit-input'); if (!i) return; var v = String(i.value || '').trim(); if (!v) { toast('不能为空'); return; } card.text = v; saveData(); renderPanelBody(); toast('已保存'); }, 'editApply'); } }); setTimeout(function () { try { var i = document.getElementById('ma-edit-input'); if (i) i.focus(); } catch (e) {} }, 50); return; }
@@ -506,7 +536,6 @@
     
     if (act === 'toggle') { 
         if (!Array.isArray(card.disabledBy)) card.disabledBy = []; 
-        // 修复：只要有禁用状态，点击就全部清空（彻底启用）。如果无禁用状态，则添加 user 禁用。
         if (card.disabledBy.length > 0) {
             card.disabledBy = [];
         } else {
