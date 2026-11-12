@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 尺寸绝对锁定版 (彻底解决图片撑爆布局)
+ * my-new-feature.js 完美同步版 (彻底解决字色、外框、编辑黑框问题)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -33,7 +33,7 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
-  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '#333333', appIconColor: '', hideAll: false, ballPos: null }; }
+  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '', appIconColor: '', hideAll: false, ballPos: null }; }
   function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0, isGrabbing: false } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
@@ -55,8 +55,8 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; 
     if (typeof s.appName !== 'string' || !s.appName) s.appName = ds.appName;
-    if (typeof s.appColor !== 'string' || !s.appColor) s.appColor = ds.appColor;
-    if (typeof s.appIconColor !== 'string') s.appIconColor = ds.appIconColor;
+    if (typeof s.appColor !== 'string') s.appColor = ''; // 默认空，代表跟随原生
+    if (typeof s.appIconColor !== 'string') s.appIconColor = '';
     if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
     if (!d.meta || typeof d.meta !== 'object') d.meta = def.meta; if (typeof d.meta.lastGrabAt !== 'number') d.meta.lastGrabAt = 0; if (typeof d.meta.lastMischiefAt !== 'number') d.meta.lastMischiefAt = 0; if (!Array.isArray(d.meta.grabbedKeys)) d.meta.grabbedKeys = []; if (d.meta.grabbedKeys.length > 400) d.meta.grabbedKeys = d.meta.grabbedKeys.slice(-400); if (typeof d.meta.isGrabbing !== 'boolean') d.meta.isGrabbing = false;
@@ -69,20 +69,17 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  // 【绝对稳定】气泡注入方案
   function injectBubbleToChat(text) {
     try {
       var now = Date.now();
       var newMsg = { side: 'in', text: text, time: now };
       INJECTED_MSGS.push(newMsg); if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
 
-      // 1. 写入底层数据（确保刷新后原网页能渲染）
       var msgs = readChatMsgs(); msgs.push(newMsg); localStorage.setItem(LS_KEY_CHAT, JSON.stringify(msgs));
       
       var chatBody = document.getElementById('chat-body');
-      if (!chatBody) return true; // 如果不在聊天页，只写数据，进去时会渲染
+      if (!chatBody) return true;
 
-      // 2. 寻找最纯净的模版
       var templateNode = null;
       var children = Array.from(chatBody.children);
       for (var i = children.length - 1; i >= 0; i--) {
@@ -98,15 +95,12 @@
           bubbleEl = templateNode.cloneNode(true);
           if (bubbleEl.id) bubbleEl.removeAttribute('id');
           var nodesWithId = bubbleEl.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
-          
           if (bubbleEl.classList) { bubbleEl.classList.remove('msg-out', 'me', 'right', 'self'); bubbleEl.classList.add('msg-in', 'left'); }
           bubbleEl.style.alignSelf = 'flex-start'; bubbleEl.style.marginLeft = '0'; bubbleEl.style.marginRight = 'auto';
-          
           var walker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
           while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
           if (targetTextNode) targetTextNode.nodeValue = text; else bubbleEl.innerText = text;
       } else {
-          // 兜底：完全自建
           bubbleEl = document.createElement('div');
           bubbleEl.className = 'msg in left';
           bubbleEl.style.cssText = 'display:flex; margin: 10px 15px; align-self: flex-start; clear: both;';
@@ -122,7 +116,6 @@
     } catch (err) { return false; }
   }
 
-  // 刷新或重进补气泡
   function checkAndRepairChat() {
     var chatBody = document.getElementById('chat-body');
     if (!chatBody || INJECTED_MSGS.length === 0) return;
@@ -239,9 +232,8 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        /* 彻底隔离原网页样式污染 */
-        '#ma-app-icon{position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;}',
-        '.ma-app-custom-icon{width:48px; height:48px; margin:0 auto; border-radius:14px; background-size:cover; background-position:center; background-repeat:no-repeat; flex-shrink:0; overflow:hidden; box-sizing:border-box;}',
+        '#ma-app-icon{position:relative;cursor:pointer;}',
+        '.ma-app-custom-icon{width:100%; height:100%; border-radius:22%; background-size:cover; background-position:center; background-repeat:no-repeat; flex-shrink:0; overflow:hidden; box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff !important;display:none;align-items:center;justify-content:center;color:#333 !important;font-size:11px;font-weight:600;border:1px solid #e0e0e0 !important;box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;z-index:10;box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot.on{display:flex !important;}',
         
@@ -332,37 +324,51 @@
     }, 'bindFabDrag');
   }
 
-  // 【绝对稳定】彻底重构图标的注入
+  // 【核心修复】借用原生外壳，内部完全替换，完美继承黑框与状态
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
       var src = natives[0];
       
-      // 自己完全重建结构，不依赖原网页内部，避免被图片撑爆
-      var clone = document.createElement('div');
-      clone.className = src.className || 'app'; 
-      clone.setAttribute('data-ma-clone', '1');
-      clone.id = 'ma-app-icon';
+      var clone = src.cloneNode(true);
+      if (clone.id) clone.removeAttribute('id');
+      var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
       
-      var iconBox = document.createElement('div');
-      iconBox.className = 'ma-app-custom-icon';
-      iconBox.setAttribute('data-ma-icon', '1');
+      // 找到内部的图标容器和文字容器
+      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]') || clone.firstElementChild;
+      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"]') || clone.lastElementChild;
       
-      var nameEl = document.createElement('div');
-      nameEl.setAttribute('data-ma-name', '1');
-      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;';
+      // 清空原生图标内容
+      if (innerIcon) {
+          innerIcon.innerHTML = '';
+          innerIcon.style.cssText = 'position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; width:100%; height:100%; border-radius: inherit;';
+          var iconBox = document.createElement('div');
+          iconBox.className = 'ma-app-custom-icon';
+          iconBox.setAttribute('data-ma-icon', '1');
+          // 让我们的盒子绝对铺满原生容器
+          iconBox.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; background-size:cover; background-position:center; background-repeat:no-repeat; transition: background-color 0.2s;';
+          innerIcon.appendChild(iconBox);
+          APP_ICON_IMG_EL = iconBox;
+      }
       
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot';
+      // 清空原生文字
+      if (innerName) {
+          innerName.innerHTML = '';
+          innerName.setAttribute('data-ma-name', '1');
+      } else {
+          innerName = document.createElement('div');
+          innerName.setAttribute('data-ma-name', '1');
+          clone.appendChild(innerName);
+      }
+
+      // 角标
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
       
-      clone.appendChild(iconBox);
-      clone.appendChild(nameEl);
-      clone.appendChild(dot);
+      clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
       APP_ICON_EL = clone;
-      APP_ICON_IMG_EL = iconBox;
-      
       clone.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); openPanel(); });
       
       applyAppearance(); 
@@ -381,10 +387,43 @@
           APP_ICON_EL = null;
           APP_ICON_IMG_EL = null;
           injectAppIcon();
+        } else {
+          // 如果存在，实时同步原生状态（比如编辑态黑框）
+          syncNativeStyle();
         }
       });
-      observer.observe(document.body, { childList: true, subtree: true });
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
     }, 'startAppIconGuard');
+  }
+
+  // 实时同步原生样式（字色、编辑黑框）
+  function syncNativeStyle() {
+    if (!APP_ICON_EL) return;
+    var nativeApp = document.querySelector('.app:not([data-ma-clone])');
+    if (!nativeApp) return;
+    
+    // 1. 同步编辑态黑框（原网页可能是在最外层加 class）
+    if (nativeApp.classList.contains('editing') || nativeApp.classList.contains('active') || nativeApp.classList.contains('selected')) {
+       if (!APP_ICON_EL.classList.contains('editing')) {
+           APP_ICON_EL.classList.add('editing');
+           APP_ICON_EL.classList.add('active');
+       }
+    } else {
+       APP_ICON_EL.classList.remove('editing');
+       APP_ICON_EL.classList.remove('active');
+    }
+
+    // 2. 同步文字颜色（如果用户没自定义）
+    if (!DB.settings.appColor) {
+        var nativeName = nativeApp.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"]');
+        if (nativeName) {
+            var nativeColor = window.getComputedStyle(nativeName).color;
+            var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
+            if (nameEl && nameEl.style.color !== nativeColor) {
+                nameEl.style.color = nativeColor;
+            }
+        }
+    }
   }
 
   function applyVisibility() {
@@ -423,7 +462,12 @@
         var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
         if (nameEl) {
             nameEl.textContent = s.appName || '审核';
-            nameEl.style.color = s.appColor || '#333333';
+            if (s.appColor) {
+                nameEl.style.color = s.appColor;
+            } else {
+                // 跟随原生
+                syncNativeStyle();
+            }
         }
         
         var holder = APP_ICON_IMG_EL;
@@ -433,7 +477,7 @@
                 holder.style.backgroundColor = 'transparent';
             } else {
                 holder.style.backgroundImage = 'none';
-                holder.style.backgroundColor = s.appIconColor || '#f5f5f5'; // 兜底背景色
+                holder.style.backgroundColor = s.appIconColor || 'transparent'; 
             }
         }
       }
@@ -448,7 +492,7 @@
       var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
       if (a) { 
         if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); a.style.cssText = ''; } 
-        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } // 彻底隐藏空圈
+        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } 
       } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
@@ -780,7 +824,11 @@
     
     h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div>';
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">名称</span><input type="text" class="ma-input" id="ma-set-app-name" maxlength="6" value="' + esc(s.appName || '审核') + '"></div>';
-    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#333333') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.appColor) + '</span></div>';
+    
+    // 字色：允许空值代表跟随系统
+    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#333333') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appColor || '跟随系统') + '</span>';
+    if (s.appColor) h += '<button class="ma-btn sm" id="ma-set-app-color-reset" style="margin-left:auto;">恢复默认</button>';
+    h += '</div>';
     
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">图标色</span><input type="color" id="ma-set-app-icon-color" value="' + esc(s.appIconColor || '#f0f0f0') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appIconColor || '默认') + '</span>';
     if (s.appIconColor) h += '<button class="ma-btn sm" id="ma-set-app-icon-reset" style="margin-left:auto;">恢复默认</button>';
@@ -808,10 +856,13 @@
         appNameInp.addEventListener('input', function () { safe(function () { DB.settings.appName = appNameInp.value.trim() || '审核'; applyAppearance(); }, 'appNameIn'); });
         appNameInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
       }
+      
       var appColorInp = body.querySelector('#ma-set-app-color'); if (appColorInp) {
         appColorInp.addEventListener('input', function () { safe(function () { DB.settings.appColor = appColorInp.value; applyAppearance(); }, 'appColorIn'); });
         appColorInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
       }
+      var appColorReset = body.querySelector('#ma-set-app-color-reset');
+      if (appColorReset) appColorReset.addEventListener('click', function () { safe(function () { DB.settings.appColor = ''; saveData(); applyAppearance(); renderPanelBody(); toast('已恢复跟随系统'); }, 'appColorReset'); });
       
       var appIconColorInp = body.querySelector('#ma-set-app-icon-color'); if (appIconColorInp) {
         appIconColorInp.addEventListener('input', function () { safe(function () { DB.settings.appIconColor = appIconColorInp.value; applyAppearance(); }, 'appIconColorIn'); });
@@ -885,11 +936,11 @@
     startEngine(); 
     startGuard();
 
-    // 聊天室自愈
     setInterval(function() {
         if (document.getElementById('chat-body')) {
             checkAndRepairChat();
         }
+        syncNativeStyle(); // 持续同步状态
     }, 1000);
 
     if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已强制唤醒'); }, 'forceTo'); }
