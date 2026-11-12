@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 绝对稳定版 (不再克隆图标，暴力重构布局，绝不丢失)
+ * my-new-feature.js 尺寸绝对锁定版 (彻底解决图片撑爆布局)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -99,7 +99,6 @@
           if (bubbleEl.id) bubbleEl.removeAttribute('id');
           var nodesWithId = bubbleEl.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
           
-          // 暴力清理可能干扰布局的类名
           if (bubbleEl.classList) { bubbleEl.classList.remove('msg-out', 'me', 'right', 'self'); bubbleEl.classList.add('msg-in', 'left'); }
           bubbleEl.style.alignSelf = 'flex-start'; bubbleEl.style.marginLeft = '0'; bubbleEl.style.marginRight = 'auto';
           
@@ -240,7 +239,9 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        '#ma-app-icon{position:relative;cursor:pointer;}',
+        /* 彻底隔离原网页样式污染 */
+        '#ma-app-icon{position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;}',
+        '.ma-app-custom-icon{width:48px; height:48px; margin:0 auto; border-radius:14px; background-size:cover; background-position:center; background-repeat:no-repeat; flex-shrink:0; overflow:hidden; box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff !important;display:none;align-items:center;justify-content:center;color:#333 !important;font-size:11px;font-weight:600;border:1px solid #e0e0e0 !important;box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;z-index:10;box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot.on{display:flex !important;}',
         
@@ -331,61 +332,42 @@
     }, 'bindFabDrag');
   }
 
-  // 【绝对稳定】完全重构图标的注入
+  // 【绝对稳定】彻底重构图标的注入
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
       var src = natives[0];
       
-      // 我们自己重建整个 app 结构，杜绝原网页残留
+      // 自己完全重建结构，不依赖原网页内部，避免被图片撑爆
       var clone = document.createElement('div');
-      clone.className = src.className; 
-      clone.classList.add('ma-cloned-app');
-      clone.removeAttribute('id');
+      clone.className = src.className || 'app'; 
+      clone.setAttribute('data-ma-clone', '1');
+      clone.id = 'ma-app-icon';
       
-      // 内部结构：绝对定位的背景图 + 文字
-      var iconWrap = document.createElement('div');
-      iconWrap.setAttribute('data-ma-icon', '1');
-      iconWrap.style.cssText = 'width:100%; height:100%; border-radius: 22%; background-size: cover; background-position: center; background-repeat: no-repeat; transition: background-color 0.2s; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center;';
+      var iconBox = document.createElement('div');
+      iconBox.className = 'ma-app-custom-icon';
+      iconBox.setAttribute('data-ma-icon', '1');
       
-      // 名字
       var nameEl = document.createElement('div');
       nameEl.setAttribute('data-ma-name', '1');
-      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#333; margin-top: 6px;';
+      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;';
       
-      // 角标
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; 
-
-      // 如果原网页有特定的包裹层，尽量利用它
-      var innerIcon = src.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
-      var innerName = src.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot';
       
-      if (innerIcon && innerName) {
-          // 有原生结构，直接清空内部
-          clone.innerHTML = '';
-          innerIcon.innerHTML = ''; // 清空原生 icon
-          innerIcon.appendChild(iconWrap); // 塞入我们的自适应背景
-          innerName.innerHTML = ''; // 清空原生名字
-          innerName.appendChild(nameEl);
-          clone.appendChild(innerIcon);
-          clone.appendChild(innerName);
-          APP_ICON_IMG_EL = innerIcon;
-      } else {
-          // 如果找不到，直接全自定义
-          clone.appendChild(iconWrap);
-          clone.appendChild(nameEl);
-          APP_ICON_IMG_EL = iconWrap;
-      }
-
+      clone.appendChild(iconBox);
+      clone.appendChild(nameEl);
       clone.appendChild(dot);
-      clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
       APP_ICON_EL = clone;
+      APP_ICON_IMG_EL = iconBox;
+      
       clone.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); openPanel(); });
       
-      applyAppearance(); updateBadge(); return true;
+      applyAppearance(); 
+      updateBadge(); 
+      return true;
     }, 'injectAppIcon', false);
   }
 
@@ -444,7 +426,7 @@
             nameEl.style.color = s.appColor || '#333333';
         }
         
-        var holder = APP_ICON_EL.querySelector('[data-ma-icon]');
+        var holder = APP_ICON_IMG_EL;
         if (holder) {
             if (s.appImage) {
                 holder.style.backgroundImage = 'url("' + s.appImage + '")';
