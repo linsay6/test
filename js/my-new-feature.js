@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 终极完美版 (满血性能，极速加载)
+ * my-new-feature.js 终极稳定版 (Self-Healing 机制，无视刷新/框架覆盖)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -20,7 +20,7 @@
   var CURRENT_TAB = 'pending', PANEL_OPEN = false, URL_FORCE_SHOW = false;
   var APP_ICON_EL = null, APP_ICON_IMG_EL = null;
   var OPEN_GROUPS = null;
-  var INJECTED_MSGS = []; // 记录本次会话注入的消息
+  var INJECTED_MSGS = []; 
 
   function safe(fn, name, def) { try { return fn(); } catch (err) { try { console.warn('[审计] ' + (name || 'task') + ' 出错：', err); } catch (e2) {} return def; } }
   function uid(prefix) { return (prefix || 'id') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
@@ -121,7 +121,6 @@
     } catch (err) { return false; }
   }
 
-  // 【核心修复】退回再进补齐消息
   function checkAndRepairChat() {
     var chatBody = document.getElementById('chat-body');
     if (!chatBody || INJECTED_MSGS.length === 0) return;
@@ -376,16 +375,22 @@
     }, 'injectAppIcon', false);
   }
 
-  // 【核心修复】极轻量级轮询检测，绝对不会卡死网页
-  function startAppIconPolling() {
+  // 【核心修复】自愈机制：使用 MutationObserver 监听九宫格，被覆盖了立刻重新插入
+  function startAppIconGuard() {
     safe(function () {
-      if (injectAppIcon()) return;
-      var tries = 0;
-      var timer = setInterval(function () {
-        tries++;
-        if (injectAppIcon() || tries > 100) clearInterval(timer);
-      }, 200);
-    }, 'startAppIconPolling');
+      injectAppIcon();
+
+      var observer = new MutationObserver(function (mutations) {
+        // 如果我们的图标不见了，立刻补上
+        if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) {
+          APP_ICON_EL = null;
+          APP_ICON_IMG_EL = null;
+          injectAppIcon();
+        }
+      });
+      
+      observer.observe(document.body, { childList: true, subtree: true });
+    }, 'startAppIconGuard');
   }
 
   function applyVisibility() {
@@ -892,10 +897,11 @@
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; var mat = FAB.style.transform.match(/translate3d\(([^p]+)px, ([^p]+)px/); if(mat) { var x = clamp(parseFloat(mat[1]), 4, Math.max(4, window.innerWidth - size - 4)); var y = clamp(parseFloat(mat[2]), 4, Math.max(4, window.innerHeight - size - 4)); FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; } }, 'resize'); }); }
     
-    startAppIconPolling(); 
+    startAppIconGuard(); // 自愈机制
     startEngine(); 
     startGuard();
 
+    // 聊天室自愈
     setInterval(function() {
         if (document.getElementById('chat-body')) {
             checkAndRepairChat();
