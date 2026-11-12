@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 完美同步版 (彻底解决字色、外框、编辑黑框问题)
+ * my-new-feature.js 极速稳定版 (退回锁定尺寸，绝对不卡顿)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -55,7 +55,7 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; 
     if (typeof s.appName !== 'string' || !s.appName) s.appName = ds.appName;
-    if (typeof s.appColor !== 'string') s.appColor = ''; // 默认空，代表跟随原生
+    if (typeof s.appColor !== 'string') s.appColor = '';
     if (typeof s.appIconColor !== 'string') s.appIconColor = '';
     if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
@@ -324,51 +324,36 @@
     }, 'bindFabDrag');
   }
 
-  // 【核心修复】借用原生外壳，内部完全替换，完美继承黑框与状态
+  // 【绝对稳定】彻底重构图标的注入 (退回尺寸锁定版)
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
       var src = natives[0];
       
-      var clone = src.cloneNode(true);
-      if (clone.id) clone.removeAttribute('id');
-      var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
+      var clone = document.createElement('div');
+      clone.className = src.className || 'app'; 
+      clone.setAttribute('data-ma-clone', '1');
+      clone.id = 'ma-app-icon';
       
-      // 找到内部的图标容器和文字容器
-      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]') || clone.firstElementChild;
-      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"]') || clone.lastElementChild;
+      var iconBox = document.createElement('div');
+      iconBox.className = 'ma-app-custom-icon';
+      iconBox.setAttribute('data-ma-icon', '1');
       
-      // 清空原生图标内容
-      if (innerIcon) {
-          innerIcon.innerHTML = '';
-          innerIcon.style.cssText = 'position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; width:100%; height:100%; border-radius: inherit;';
-          var iconBox = document.createElement('div');
-          iconBox.className = 'ma-app-custom-icon';
-          iconBox.setAttribute('data-ma-icon', '1');
-          // 让我们的盒子绝对铺满原生容器
-          iconBox.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; background-size:cover; background-position:center; background-repeat:no-repeat; transition: background-color 0.2s;';
-          innerIcon.appendChild(iconBox);
-          APP_ICON_IMG_EL = iconBox;
-      }
+      var nameEl = document.createElement('div');
+      nameEl.setAttribute('data-ma-name', '1');
+      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;';
       
-      // 清空原生文字
-      if (innerName) {
-          innerName.innerHTML = '';
-          innerName.setAttribute('data-ma-name', '1');
-      } else {
-          innerName = document.createElement('div');
-          innerName.setAttribute('data-ma-name', '1');
-          clone.appendChild(innerName);
-      }
-
-      // 角标
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot';
       
-      clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
+      clone.appendChild(iconBox);
+      clone.appendChild(nameEl);
+      clone.appendChild(dot);
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
       APP_ICON_EL = clone;
+      APP_ICON_IMG_EL = iconBox;
+      
       clone.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); openPanel(); });
       
       applyAppearance(); 
@@ -387,43 +372,10 @@
           APP_ICON_EL = null;
           APP_ICON_IMG_EL = null;
           injectAppIcon();
-        } else {
-          // 如果存在，实时同步原生状态（比如编辑态黑框）
-          syncNativeStyle();
         }
       });
-      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+      observer.observe(document.body, { childList: true, subtree: true });
     }, 'startAppIconGuard');
-  }
-
-  // 实时同步原生样式（字色、编辑黑框）
-  function syncNativeStyle() {
-    if (!APP_ICON_EL) return;
-    var nativeApp = document.querySelector('.app:not([data-ma-clone])');
-    if (!nativeApp) return;
-    
-    // 1. 同步编辑态黑框（原网页可能是在最外层加 class）
-    if (nativeApp.classList.contains('editing') || nativeApp.classList.contains('active') || nativeApp.classList.contains('selected')) {
-       if (!APP_ICON_EL.classList.contains('editing')) {
-           APP_ICON_EL.classList.add('editing');
-           APP_ICON_EL.classList.add('active');
-       }
-    } else {
-       APP_ICON_EL.classList.remove('editing');
-       APP_ICON_EL.classList.remove('active');
-    }
-
-    // 2. 同步文字颜色（如果用户没自定义）
-    if (!DB.settings.appColor) {
-        var nativeName = nativeApp.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"]');
-        if (nativeName) {
-            var nativeColor = window.getComputedStyle(nativeName).color;
-            var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
-            if (nameEl && nameEl.style.color !== nativeColor) {
-                nameEl.style.color = nativeColor;
-            }
-        }
-    }
   }
 
   function applyVisibility() {
@@ -462,12 +414,7 @@
         var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
         if (nameEl) {
             nameEl.textContent = s.appName || '审核';
-            if (s.appColor) {
-                nameEl.style.color = s.appColor;
-            } else {
-                // 跟随原生
-                syncNativeStyle();
-            }
+            if (s.appColor) nameEl.style.color = s.appColor;
         }
         
         var holder = APP_ICON_IMG_EL;
@@ -477,7 +424,7 @@
                 holder.style.backgroundColor = 'transparent';
             } else {
                 holder.style.backgroundImage = 'none';
-                holder.style.backgroundColor = s.appIconColor || 'transparent'; 
+                holder.style.backgroundColor = s.appIconColor || '#f5f5f5'; // 兜底背景色
             }
         }
       }
@@ -492,7 +439,7 @@
       var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
       if (a) { 
         if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); a.style.cssText = ''; } 
-        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } 
+        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } // 彻底隐藏空圈
       } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
@@ -825,7 +772,6 @@
     h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div>';
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">名称</span><input type="text" class="ma-input" id="ma-set-app-name" maxlength="6" value="' + esc(s.appName || '审核') + '"></div>';
     
-    // 字色：允许空值代表跟随系统
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#333333') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appColor || '跟随系统') + '</span>';
     if (s.appColor) h += '<button class="ma-btn sm" id="ma-set-app-color-reset" style="margin-left:auto;">恢复默认</button>';
     h += '</div>';
@@ -940,7 +886,6 @@
         if (document.getElementById('chat-body')) {
             checkAndRepairChat();
         }
-        syncNativeStyle(); // 持续同步状态
     }, 1000);
 
     if (URL_FORCE_SHOW) { safe(function () { if (FAB) FAB.classList.remove('ma-hidden'); toast('已强制唤醒'); }, 'forceTo'); }
