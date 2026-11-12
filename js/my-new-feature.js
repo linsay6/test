@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 终极纯净版 (极速加载、气泡纯净化、图片强显)
+ * my-new-feature.js 终极稳定版 (寄生克隆 + 温和隐藏 + 极速加载)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -69,9 +69,6 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  /* ==========================================
-   * 核心：绝对纯净的气泡注入
-   * ========================================== */
   function injectBubbleToChat(text) {
     try {
       var now = Date.now();
@@ -90,11 +87,9 @@
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
         
         var txt = el.textContent || '';
-        if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('来电') >= 0 || txt.indexOf('词典') >= 0) continue; 
+        // 极其精准的黑名单，过滤掉会带电话/红包图标的系统消息
+        if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('来电') >= 0 || txt.indexOf('红包') >= 0 || txt.indexOf('已拒绝') >= 0) continue; 
         
-        // 终极过滤：只要有 svg 或 img 标签直接跳过（防止克隆到电话图标）
-        if (el.querySelector('svg') || el.querySelector('img')) continue;
-
         if (txt.trim().length > 0) { templateNode = el; break; }
       }
 
@@ -111,7 +106,6 @@
           while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
           if (targetTextNode) targetTextNode.nodeValue = text; else bubbleEl.innerText = text;
       } else {
-          // 纯手工兜底，绝对不带任何图标
           bubbleEl = document.createElement('div');
           bubbleEl.className = 'msg in left';
           bubbleEl.style.cssText = 'display:flex; margin: 10px 15px; align-self: flex-start; clear: both;';
@@ -140,8 +134,7 @@
       var el = children[i], cls = (el.className || '').toLowerCase();
       if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0) continue;
       var txt = el.textContent || '';
-      if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('来电') >= 0) continue; 
-      if (el.querySelector('svg') || el.querySelector('img')) continue;
+      if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('来电') >= 0 || txt.indexOf('红包') >= 0 || txt.indexOf('已拒绝') >= 0) continue; 
       if (txt.trim().length > 0) { templateNode = el; break; }
     }
 
@@ -244,9 +237,9 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        /* 图标强力覆盖与隔离 */
+        /* 温和隐藏内部元素，绝对覆盖 */
         '#ma-app-icon{position:relative;}',
-        '.ma-app-custom-icon{width:100% !important; height:100% !important; border-radius:inherit !important; background-size:cover !important; background-position:center !important; background-repeat:no-repeat !important;}',
+        '.ma-app-cover{position:absolute !important; top:0 !important; left:0 !important; width:100% !important; height:100% !important; border-radius:inherit !important; background-size:cover !important; background-position:center !important; pointer-events:none !important; z-index:2 !important;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff !important;display:none;align-items:center;justify-content:center;color:#333 !important;font-size:11px;font-weight:600;border:1px solid #e0e0e0 !important;box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;z-index:10;box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot.on{display:flex !important;}',
         
@@ -337,7 +330,7 @@
     }, 'bindFabDrag');
   }
 
-  // 【核心修复】完全清空，放入专属背景
+  // 【温和隐藏覆盖法】保留原结构，隐藏内容，覆盖自定义层
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
@@ -355,29 +348,23 @@
       var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
       
       if (innerIcon) {
-          // 暴力清空内部
-          innerIcon.innerHTML = '';
           innerIcon.style.position = 'relative';
           innerIcon.style.overflow = 'hidden';
           
-          // 塞入纯背景 div
-          var bgDiv = document.createElement('div');
-          bgDiv.className = 'ma-app-custom-icon';
-          bgDiv.setAttribute('data-ma-bg', '1');
-          innerIcon.appendChild(bgDiv);
-          APP_ICON_IMG_EL = bgDiv;
-      } else {
-          innerIcon = clone.firstElementChild;
-          if (innerIcon) {
-              innerIcon.innerHTML = '';
-              innerIcon.style.position = 'relative';
-              innerIcon.style.overflow = 'hidden';
-              var bgDiv2 = document.createElement('div');
-              bgDiv2.className = 'ma-app-custom-icon';
-              bgDiv2.setAttribute('data-ma-bg', '1');
-              innerIcon.appendChild(bgDiv2);
-              APP_ICON_IMG_EL = bgDiv2;
+          // 隐藏所有原生子节点，绝不删除（保持原网页事件）
+          for (var c = 0; c < innerIcon.children.length; c++) {
+              innerIcon.children[c].style.display = 'none';
           }
+          if (innerIcon.tagName === 'IMG') {
+              innerIcon.style.opacity = '0';
+          }
+
+          // 塞入我们的绝对定位覆盖层
+          var cover = document.createElement('div');
+          cover.className = 'ma-app-cover';
+          cover.setAttribute('data-ma-cover', '1');
+          innerIcon.appendChild(cover);
+          APP_ICON_IMG_EL = cover;
       }
 
       var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
@@ -401,15 +388,15 @@
     }, 'injectAppIcon', false);
   }
 
-  // 100ms 极速寻找
+  // 200ms 极速寻找
   function startAppIconFastPolling() {
     safe(function () {
       if (injectAppIcon()) return;
       var tries = 0;
       var timer = setInterval(function () {
         tries++;
-        if (injectAppIcon() || tries > 100) clearInterval(timer);
-      }, 100);
+        if (injectAppIcon() || tries > 50) clearInterval(timer);
+      }, 200);
     }, 'startAppIconFastPolling');
   }
 
@@ -453,14 +440,15 @@
             else nameEl.style.color = ''; 
         }
         
-        var holder = APP_ICON_EL.querySelector('[data-ma-bg]');
+        var holder = APP_ICON_EL.querySelector('[data-ma-cover]');
         if (holder) {
             if (s.appImage) {
                 holder.style.backgroundImage = 'url("' + s.appImage + '")';
                 holder.style.backgroundColor = 'transparent';
             } else {
                 holder.style.backgroundImage = 'none';
-                holder.style.backgroundColor = s.appIconColor || '#f5f5f5'; 
+                // 如果没有图片，用透明色覆盖（原图标已被隐藏）
+                holder.style.backgroundColor = s.appIconColor || 'transparent'; 
             }
         }
       }
@@ -913,7 +901,7 @@
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; var mat = FAB.style.transform.match(/translate3d\(([^p]+)px, ([^p]+)px/); if(mat) { var x = clamp(parseFloat(mat[1]), 4, Math.max(4, window.innerWidth - size - 4)); var y = clamp(parseFloat(mat[2]), 4, Math.max(4, window.innerHeight - size - 4)); FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; } }, 'resize'); }); }
     
-    startAppIconFastPolling(); // 终极极速注入
+    startAppIconFastPolling(); 
     startEngine(); 
     startGuard();
 
