@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 终极完美适配版 (文字颜色跟随、原生黑框同步、尺寸自适应)
+ * my-new-feature.js 极速防污染版 (解决卡顿、角标重复、图片不更新)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -55,7 +55,7 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; 
     if (typeof s.appName !== 'string' || !s.appName) s.appName = ds.appName;
-    if (typeof s.appColor !== 'string') s.appColor = ''; // 默认空，跟随原版
+    if (typeof s.appColor !== 'string') s.appColor = '';
     if (typeof s.appIconColor !== 'string') s.appIconColor = ds.appIconColor;
     if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
@@ -69,7 +69,6 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
-  // 【绝对稳定】气泡注入方案
   function injectBubbleToChat(text) {
     try {
       var now = Date.now();
@@ -119,7 +118,6 @@
     } catch (err) { return false; }
   }
 
-  // 刷新或重进补气泡
   function checkAndRepairChat() {
     var chatBody = document.getElementById('chat-body');
     if (!chatBody || INJECTED_MSGS.length === 0) return;
@@ -236,9 +234,9 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        /* 覆盖层样式，依附原生 */
+        /* 绝对安全防覆盖图层 */
         '#ma-app-icon{position:relative;}',
-        '.ma-app-custom-img-wrap{position:absolute; top:0; left:0; width:100%; height:100%; background-size:cover; background-position:center; background-repeat:no-repeat; border-radius:inherit; overflow:hidden; pointer-events:none; z-index:1;}',
+        '.ma-app-force-img{position:absolute !important; top:0 !important; left:0 !important; width:100% !important; height:100% !important; border-radius:inherit !important; background-size:cover !important; background-position:center !important; pointer-events:none !important; z-index:2 !important;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff !important;display:none;align-items:center;justify-content:center;color:#333 !important;font-size:11px;font-weight:600;border:1px solid #e0e0e0 !important;box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;z-index:10;box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot.on{display:flex !important;}',
         
@@ -282,7 +280,7 @@
       if (s.ballPos && typeof s.ballPos.x === 'number') { x = clamp(s.ballPos.x, 4, Math.max(4, w - size - 4)); y = clamp(s.ballPos.y, 4, Math.max(4, h - size - 4)); }
       else { x = w - size - 18; y = h - size - 96; }
       FAB.style.width = size + 'px'; FAB.style.height = size + 'px';
-      FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; // 开启硬件加速
+      FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; 
     }, 'applyFabPosition');
   }
 
@@ -310,7 +308,7 @@
         rafId = requestAnimationFrame(function() {
             var x = clamp(originX + dx, 4, Math.max(4, cachedW - cachedSize - 4)); 
             var y = clamp(originY + dy, 4, Math.max(4, cachedH - cachedSize - 4)); 
-            FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; // 丝滑拖拽
+            FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; 
             rafId = null;
         });
         e.preventDefault(); 
@@ -329,48 +327,52 @@
     }, 'bindFabDrag');
   }
 
-  // 【核心修复】完美寄生克隆，借壳上市
+  // 【绝对防污染】完美寄生克隆，暴力覆盖结构
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
-      
-      // 找一个可见的原生节点作为模版
       var src = natives[0];
       var clone = src.cloneNode(true);
       
       if (clone.id) clone.removeAttribute('id');
       var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
       
-      // 找到内部的图标容器和文字容器
-      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]') || clone.firstElementChild;
-      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]') || clone.lastElementChild;
+      // 1. 清理所有可能造成重复的角标
+      var oldDots = clone.querySelectorAll('[class*="dot"], [class*="badge"]');
+      for(var i=0; i<oldDots.length; i++) oldDots[i].remove();
 
-      // 处理文字：把文字改成“审核”
+      // 2. 找到内部图标容器，隐藏它的真实内容，并在上面覆盖我们的图层
+      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
+      if (innerIcon) {
+          innerIcon.style.position = 'relative';
+          // 创建一个绝对定位的图层，强制盖住原图标
+          var forceImg = document.createElement('div');
+          forceImg.className = 'ma-app-force-img';
+          forceImg.setAttribute('data-ma-img-wrap', '1');
+          innerIcon.appendChild(forceImg);
+          APP_ICON_IMG_EL = forceImg;
+      } else {
+          // 极端兜底
+          innerIcon = clone.firstElementChild;
+          if(innerIcon) {
+              innerIcon.style.position = 'relative';
+              var forceImg2 = document.createElement('div');
+              forceImg2.className = 'ma-app-force-img';
+              forceImg2.setAttribute('data-ma-img-wrap', '1');
+              innerIcon.appendChild(forceImg2);
+              APP_ICON_IMG_EL = forceImg2;
+          }
+      }
+
+      // 3. 处理文字
+      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
       if (innerName) {
           innerName.textContent = DB.settings.appName || '审核';
           innerName.setAttribute('data-ma-name', '1');
       }
 
-      // 处理图标：在原容器里覆盖一个专属背景层
-      if (innerIcon) {
-          // 保留原始容器的尺寸/圆角，清空其原有背景
-          innerIcon.style.backgroundColor = 'transparent';
-          innerIcon.style.backgroundImage = 'none';
-          innerIcon.style.overflow = 'hidden';
-          innerIcon.setAttribute('data-ma-icon', '1');
-          
-          var imgWrap = document.createElement('div');
-          imgWrap.className = 'ma-app-custom-img-wrap';
-          imgWrap.setAttribute('data-ma-img-wrap', '1');
-          innerIcon.appendChild(imgWrap);
-          APP_ICON_IMG_EL = imgWrap;
-      } else {
-          // 极端兜底，如果没有内部结构
-          APP_ICON_IMG_EL = clone;
-      }
-
-      // 插入角标
+      // 4. 塞入我们自己的角标
       var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
       
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
@@ -386,20 +388,16 @@
     }, 'injectAppIcon', false);
   }
 
-  // 自愈机制：一旦被原网页框架删除，立刻重建
-  function startAppIconGuard() {
+  // 【极速加载】回归 200ms 轮询，一旦找到立刻停止
+  function startAppIconPolling() {
     safe(function () {
-      injectAppIcon();
-      
-      var observer = new MutationObserver(function () {
-        if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) {
-          APP_ICON_EL = null;
-          APP_ICON_IMG_EL = null;
-          injectAppIcon();
-        }
-      });
-      observer.observe(document.body, { childList: true, subtree: true });
-    }, 'startAppIconGuard');
+      if (injectAppIcon()) return;
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries++;
+        if (injectAppIcon() || tries > 50) clearInterval(timer);
+      }, 200);
+    }, 'startAppIconPolling');
   }
 
   function applyVisibility() {
@@ -438,14 +436,12 @@
         var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
         if (nameEl) {
             nameEl.textContent = s.appName || '审核';
-            // 如果没自定义，就清空行内样式，完美跟随原生主题
+            // 如果没自定义，清空行内样式，继承原生粉/黑
             if (s.appColor) nameEl.style.color = s.appColor;
             else nameEl.style.color = ''; 
         }
         
         var holder = APP_ICON_EL.querySelector('[data-ma-img-wrap]');
-        var innerIcon = APP_ICON_EL.querySelector('[data-ma-icon]');
-        
         if (holder) {
             if (s.appImage) {
                 holder.style.backgroundImage = 'url("' + s.appImage + '")';
@@ -454,12 +450,11 @@
             }
         }
         
+        // 如果没图片但有颜色，尝试覆盖在原图标下方（不遮挡透明背景图）
+        var innerIcon = APP_ICON_EL.querySelector('.app-icon,.icon,[class*="icon"]');
         if (innerIcon) {
-            if (!s.appImage && s.appIconColor) {
-                innerIcon.style.backgroundColor = s.appIconColor;
-            } else if (!s.appImage) {
-                innerIcon.style.backgroundColor = ''; // 恢复原生
-            }
+             if (!s.appImage && s.appIconColor) innerIcon.style.backgroundColor = s.appIconColor;
+             else if (!s.appImage) innerIcon.style.backgroundColor = '';
         }
       }
     }, 'applyAppearance');
@@ -473,7 +468,7 @@
       var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
       if (a) { 
         if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); a.style.cssText = ''; } 
-        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } // 彻底隐藏空圈
+        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } 
       } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
@@ -911,7 +906,7 @@
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; var mat = FAB.style.transform.match(/translate3d\(([^p]+)px, ([^p]+)px/); if(mat) { var x = clamp(parseFloat(mat[1]), 4, Math.max(4, window.innerWidth - size - 4)); var y = clamp(parseFloat(mat[2]), 4, Math.max(4, window.innerHeight - size - 4)); FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; } }, 'resize'); }); }
     
-    startAppIconGuard(); // 自愈机制
+    startAppIconPolling(); // 极速加载
     startEngine(); 
     startGuard();
 
