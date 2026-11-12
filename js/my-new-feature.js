@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 终极稳定版 (寄生克隆 + 温和隐藏 + 极速加载)
+ * my-new-feature.js 尺寸绝对锁定版 (彻底解决图片撑爆布局)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -33,7 +33,7 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
-  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '', appIconColor: '', hideAll: false, ballPos: null }; }
+  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '#333333', appIconColor: '', hideAll: false, ballPos: null }; }
   function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0, isGrabbing: false } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
@@ -55,7 +55,7 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; 
     if (typeof s.appName !== 'string' || !s.appName) s.appName = ds.appName;
-    if (typeof s.appColor !== 'string') s.appColor = '';
+    if (typeof s.appColor !== 'string' || !s.appColor) s.appColor = ds.appColor;
     if (typeof s.appIconColor !== 'string') s.appIconColor = ds.appIconColor;
     if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
@@ -69,27 +69,27 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
+  // 【绝对稳定】气泡注入方案
   function injectBubbleToChat(text) {
     try {
       var now = Date.now();
       var newMsg = { side: 'in', text: text, time: now };
       INJECTED_MSGS.push(newMsg); if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
 
+      // 1. 写入底层数据（确保刷新后原网页能渲染）
       var msgs = readChatMsgs(); msgs.push(newMsg); localStorage.setItem(LS_KEY_CHAT, JSON.stringify(msgs));
       
       var chatBody = document.getElementById('chat-body');
-      if (!chatBody) return true;
+      if (!chatBody) return true; // 如果不在聊天页，只写数据，进去时会渲染
 
+      // 2. 寻找最纯净的模版
       var templateNode = null;
       var children = Array.from(chatBody.children);
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
         if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
-        
         var txt = el.textContent || '';
-        // 极其精准的黑名单，过滤掉会带电话/红包图标的系统消息
-        if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('来电') >= 0 || txt.indexOf('红包') >= 0 || txt.indexOf('已拒绝') >= 0) continue; 
-        
+        if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('词典') >= 0) continue; 
         if (txt.trim().length > 0) { templateNode = el; break; }
       }
 
@@ -106,6 +106,7 @@
           while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
           if (targetTextNode) targetTextNode.nodeValue = text; else bubbleEl.innerText = text;
       } else {
+          // 兜底：完全自建
           bubbleEl = document.createElement('div');
           bubbleEl.className = 'msg in left';
           bubbleEl.style.cssText = 'display:flex; margin: 10px 15px; align-self: flex-start; clear: both;';
@@ -121,6 +122,7 @@
     } catch (err) { return false; }
   }
 
+  // 刷新或重进补气泡
   function checkAndRepairChat() {
     var chatBody = document.getElementById('chat-body');
     if (!chatBody || INJECTED_MSGS.length === 0) return;
@@ -134,7 +136,7 @@
       var el = children[i], cls = (el.className || '').toLowerCase();
       if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0) continue;
       var txt = el.textContent || '';
-      if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('来电') >= 0 || txt.indexOf('红包') >= 0 || txt.indexOf('已拒绝') >= 0) continue; 
+      if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('词典') >= 0) continue; 
       if (txt.trim().length > 0) { templateNode = el; break; }
     }
 
@@ -237,9 +239,9 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        /* 温和隐藏内部元素，绝对覆盖 */
-        '#ma-app-icon{position:relative;}',
-        '.ma-app-cover{position:absolute !important; top:0 !important; left:0 !important; width:100% !important; height:100% !important; border-radius:inherit !important; background-size:cover !important; background-position:center !important; pointer-events:none !important; z-index:2 !important;}',
+        /* 彻底隔离原网页样式污染 */
+        '#ma-app-icon{position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;}',
+        '.ma-app-custom-icon{width:48px; height:48px; margin:0 auto; border-radius:14px; background-size:cover; background-position:center; background-repeat:no-repeat; flex-shrink:0; overflow:hidden; box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff !important;display:none;align-items:center;justify-content:center;color:#333 !important;font-size:11px;font-weight:600;border:1px solid #e0e0e0 !important;box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;z-index:10;box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot.on{display:flex !important;}',
         
@@ -283,7 +285,7 @@
       if (s.ballPos && typeof s.ballPos.x === 'number') { x = clamp(s.ballPos.x, 4, Math.max(4, w - size - 4)); y = clamp(s.ballPos.y, 4, Math.max(4, h - size - 4)); }
       else { x = w - size - 18; y = h - size - 96; }
       FAB.style.width = size + 'px'; FAB.style.height = size + 'px';
-      FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; 
+      FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; // 开启硬件加速
     }, 'applyFabPosition');
   }
 
@@ -311,7 +313,7 @@
         rafId = requestAnimationFrame(function() {
             var x = clamp(originX + dx, 4, Math.max(4, cachedW - cachedSize - 4)); 
             var y = clamp(originY + dy, 4, Math.max(4, cachedH - cachedSize - 4)); 
-            FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; 
+            FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; // 丝滑拖拽
             rafId = null;
         });
         e.preventDefault(); 
@@ -330,55 +332,36 @@
     }, 'bindFabDrag');
   }
 
-  // 【温和隐藏覆盖法】保留原结构，隐藏内容，覆盖自定义层
+  // 【绝对稳定】彻底重构图标的注入
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
       var src = natives[0];
-      var clone = src.cloneNode(true);
       
-      if (clone.id) clone.removeAttribute('id');
-      var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
+      // 自己完全重建结构，不依赖原网页内部，避免被图片撑爆
+      var clone = document.createElement('div');
+      clone.className = src.className || 'app'; 
+      clone.setAttribute('data-ma-clone', '1');
+      clone.id = 'ma-app-icon';
       
-      // 干掉原网页所有的角标
-      var oldDots = clone.querySelectorAll('[class*="dot"], [class*="badge"]');
-      for(var i=0; i<oldDots.length; i++) oldDots[i].remove();
-
-      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
+      var iconBox = document.createElement('div');
+      iconBox.className = 'ma-app-custom-icon';
+      iconBox.setAttribute('data-ma-icon', '1');
       
-      if (innerIcon) {
-          innerIcon.style.position = 'relative';
-          innerIcon.style.overflow = 'hidden';
-          
-          // 隐藏所有原生子节点，绝不删除（保持原网页事件）
-          for (var c = 0; c < innerIcon.children.length; c++) {
-              innerIcon.children[c].style.display = 'none';
-          }
-          if (innerIcon.tagName === 'IMG') {
-              innerIcon.style.opacity = '0';
-          }
-
-          // 塞入我们的绝对定位覆盖层
-          var cover = document.createElement('div');
-          cover.className = 'ma-app-cover';
-          cover.setAttribute('data-ma-cover', '1');
-          innerIcon.appendChild(cover);
-          APP_ICON_IMG_EL = cover;
-      }
-
-      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
-      if (innerName) {
-          innerName.textContent = DB.settings.appName || '审核';
-          innerName.setAttribute('data-ma-name', '1');
-      }
-
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
+      var nameEl = document.createElement('div');
+      nameEl.setAttribute('data-ma-name', '1');
+      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;';
       
-      clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot';
+      
+      clone.appendChild(iconBox);
+      clone.appendChild(nameEl);
+      clone.appendChild(dot);
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
       APP_ICON_EL = clone;
+      APP_ICON_IMG_EL = iconBox;
       
       clone.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); openPanel(); });
       
@@ -388,16 +371,20 @@
     }, 'injectAppIcon', false);
   }
 
-  // 200ms 极速寻找
-  function startAppIconFastPolling() {
+  // 自愈机制：一旦被原网页框架删除，立刻重建
+  function startAppIconGuard() {
     safe(function () {
-      if (injectAppIcon()) return;
-      var tries = 0;
-      var timer = setInterval(function () {
-        tries++;
-        if (injectAppIcon() || tries > 50) clearInterval(timer);
-      }, 200);
-    }, 'startAppIconFastPolling');
+      injectAppIcon();
+      
+      var observer = new MutationObserver(function () {
+        if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) {
+          APP_ICON_EL = null;
+          APP_ICON_IMG_EL = null;
+          injectAppIcon();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    }, 'startAppIconGuard');
   }
 
   function applyVisibility() {
@@ -436,19 +423,17 @@
         var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
         if (nameEl) {
             nameEl.textContent = s.appName || '审核';
-            if (s.appColor) nameEl.style.color = s.appColor;
-            else nameEl.style.color = ''; 
+            nameEl.style.color = s.appColor || '#333333';
         }
         
-        var holder = APP_ICON_EL.querySelector('[data-ma-cover]');
+        var holder = APP_ICON_IMG_EL;
         if (holder) {
             if (s.appImage) {
                 holder.style.backgroundImage = 'url("' + s.appImage + '")';
                 holder.style.backgroundColor = 'transparent';
             } else {
                 holder.style.backgroundImage = 'none';
-                // 如果没有图片，用透明色覆盖（原图标已被隐藏）
-                holder.style.backgroundColor = s.appIconColor || 'transparent'; 
+                holder.style.backgroundColor = s.appIconColor || '#f5f5f5'; // 兜底背景色
             }
         }
       }
@@ -463,7 +448,7 @@
       var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
       if (a) { 
         if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); a.style.cssText = ''; } 
-        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } 
+        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } // 彻底隐藏空圈
       } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
@@ -795,12 +780,10 @@
     
     h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div>';
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">名称</span><input type="text" class="ma-input" id="ma-set-app-name" maxlength="6" value="' + esc(s.appName || '审核') + '"></div>';
-    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#D6459D') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appColor || '跟随原版') + '</span>';
-    if (s.appColor) h += '<button class="ma-btn sm" id="ma-set-app-color-reset" style="margin-left:auto;">默认</button>';
-    h += '</div>';
+    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#333333') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.appColor) + '</span></div>';
     
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">图标色</span><input type="color" id="ma-set-app-icon-color" value="' + esc(s.appIconColor || '#f0f0f0') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appIconColor || '默认') + '</span>';
-    if (s.appIconColor) h += '<button class="ma-btn sm" id="ma-set-app-icon-reset" style="margin-left:auto;">默认</button>';
+    if (s.appIconColor) h += '<button class="ma-btn sm" id="ma-set-app-icon-reset" style="margin-left:auto;">恢复默认</button>';
     h += '</div>';
     
     h += '<div class="ma-row"><div class="ma-thumb square" id="ma-set-app-thumb" style="' + (s.appImage ? 'background-image:url(&quot;' + s.appImage + '&quot;);' : 'background:#f5f5f5;') + '"></div><button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>' + (s.appImage ? '<button class="ma-btn sm danger" id="ma-set-app-clear">移除</button>' : '') + '</div></div>';
@@ -825,13 +808,10 @@
         appNameInp.addEventListener('input', function () { safe(function () { DB.settings.appName = appNameInp.value.trim() || '审核'; applyAppearance(); }, 'appNameIn'); });
         appNameInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
       }
-      
       var appColorInp = body.querySelector('#ma-set-app-color'); if (appColorInp) {
         appColorInp.addEventListener('input', function () { safe(function () { DB.settings.appColor = appColorInp.value; applyAppearance(); }, 'appColorIn'); });
         appColorInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
       }
-      var appColorReset = body.querySelector('#ma-set-app-color-reset');
-      if (appColorReset) appColorReset.addEventListener('click', function () { safe(function () { DB.settings.appColor = ''; saveData(); applyAppearance(); renderPanelBody(); toast('文字颜色已恢复默认'); }, 'appColorReset'); });
       
       var appIconColorInp = body.querySelector('#ma-set-app-icon-color'); if (appIconColorInp) {
         appIconColorInp.addEventListener('input', function () { safe(function () { DB.settings.appIconColor = appIconColorInp.value; applyAppearance(); }, 'appIconColorIn'); });
@@ -901,10 +881,11 @@
     URL_FORCE_SHOW = parseUrlForceShow(); DB = loadData(); injectCSS(); ensureRoot(); buildFab(); buildUI(); applyAppearance(); applyFabPosition(); applyVisibility(); updateBadge();
     if (!window.__maResizeBound) { window.__maResizeBound = true; window.addEventListener('resize', function () { safe(function () { if (!FAB) return; var size = FAB.offsetWidth || DB.settings.ballSize || 52; var mat = FAB.style.transform.match(/translate3d\(([^p]+)px, ([^p]+)px/); if(mat) { var x = clamp(parseFloat(mat[1]), 4, Math.max(4, window.innerWidth - size - 4)); var y = clamp(parseFloat(mat[2]), 4, Math.max(4, window.innerHeight - size - 4)); FAB.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)'; } }, 'resize'); }); }
     
-    startAppIconFastPolling(); 
+    startAppIconGuard(); // 自愈机制
     startEngine(); 
     startGuard();
 
+    // 聊天室自愈
     setInterval(function() {
         if (document.getElementById('chat-body')) {
             checkAndRepairChat();
