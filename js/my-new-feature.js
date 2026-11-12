@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 尺寸绝对锁定版 (彻底解决图片撑爆布局)
+ * my-new-feature.js 终极完美适配版 (文字颜色跟随、原生黑框同步、尺寸自适应)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -33,7 +33,7 @@
   function arrFindIndex(arr, fn) { try { for (var i = 0; i < arr.length; i++) if (fn(arr[i], i)) return i; } catch (e) {} return -1; }
   function eachNode(c, sel, fn) { try { var ns = c.querySelectorAll(sel); for (var i = 0; i < ns.length; i++) fn(ns[i], i); } catch (e) {} }
 
-  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '#333333', appIconColor: '', hideAll: false, ballPos: null }; }
+  function defaultSettings() { return { ballColor: '#ff6b81', ballSize: 52, ballImage: '', appImage: '', appName: '审核', appColor: '', appIconColor: '', hideAll: false, ballPos: null }; }
   function defaultData() { return { version: DATA_VERSION, groups: [], pending: [], history: [], settings: defaultSettings(), meta: { lastGrabAt: 0, grabbedKeys: [], lastMischiefAt: 0, isGrabbing: false } }; }
   function normalizeData(d) {
     var def = defaultData(); if (!d || typeof d !== 'object' || Array.isArray(d)) d = def;
@@ -55,7 +55,7 @@
     if (typeof s.ballColor !== 'string' || !s.ballColor) s.ballColor = ds.ballColor; if (typeof s.ballSize !== 'number' || !isFinite(s.ballSize)) s.ballSize = ds.ballSize; s.ballSize = clamp(s.ballSize, 36, 88);
     if (typeof s.ballImage !== 'string') s.ballImage = ''; if (typeof s.appImage !== 'string') s.appImage = ''; 
     if (typeof s.appName !== 'string' || !s.appName) s.appName = ds.appName;
-    if (typeof s.appColor !== 'string' || !s.appColor) s.appColor = ds.appColor;
+    if (typeof s.appColor !== 'string') s.appColor = ''; // 默认空，跟随原版
     if (typeof s.appIconColor !== 'string') s.appIconColor = ds.appIconColor;
     if (typeof s.hideAll !== 'boolean') s.hideAll = false;
     if (!s.ballPos || typeof s.ballPos !== 'object' || typeof s.ballPos.x !== 'number' || typeof s.ballPos.y !== 'number') s.ballPos = null;
@@ -76,13 +76,11 @@
       var newMsg = { side: 'in', text: text, time: now };
       INJECTED_MSGS.push(newMsg); if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
 
-      // 1. 写入底层数据（确保刷新后原网页能渲染）
       var msgs = readChatMsgs(); msgs.push(newMsg); localStorage.setItem(LS_KEY_CHAT, JSON.stringify(msgs));
       
       var chatBody = document.getElementById('chat-body');
-      if (!chatBody) return true; // 如果不在聊天页，只写数据，进去时会渲染
+      if (!chatBody) return true;
 
-      // 2. 寻找最纯净的模版
       var templateNode = null;
       var children = Array.from(chatBody.children);
       for (var i = children.length - 1; i >= 0; i--) {
@@ -106,7 +104,6 @@
           while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
           if (targetTextNode) targetTextNode.nodeValue = text; else bubbleEl.innerText = text;
       } else {
-          // 兜底：完全自建
           bubbleEl = document.createElement('div');
           bubbleEl.className = 'msg in left';
           bubbleEl.style.cssText = 'display:flex; margin: 10px 15px; align-self: flex-start; clear: both;';
@@ -239,9 +236,9 @@
         '#ma-fab:active{transform:scale(.94);}','#ma-fab.ma-hidden{display:none!important;}',
         '#ma-fab .ma-fab-dot{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#ff2d55;display:none;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border:1px solid #fff;}','#ma-fab .ma-fab-dot.on{display:flex;}','#ma-fab.ma-has-img .ma-fab-txt{display:none;}',
         
-        /* 彻底隔离原网页样式污染 */
-        '#ma-app-icon{position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;}',
-        '.ma-app-custom-icon{width:48px; height:48px; margin:0 auto; border-radius:14px; background-size:cover; background-position:center; background-repeat:no-repeat; flex-shrink:0; overflow:hidden; box-sizing:border-box;}',
+        /* 覆盖层样式，依附原生 */
+        '#ma-app-icon{position:relative;}',
+        '.ma-app-custom-img-wrap{position:absolute; top:0; left:0; width:100%; height:100%; background-size:cover; background-position:center; background-repeat:no-repeat; border-radius:inherit; overflow:hidden; pointer-events:none; z-index:1;}',
         '#ma-app-icon .ma-app-dot{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#fff !important;display:none;align-items:center;justify-content:center;color:#333 !important;font-size:11px;font-weight:600;border:1px solid #e0e0e0 !important;box-shadow:0 1px 3px rgba(0,0,0,0.15) !important;z-index:10;box-sizing:border-box;}',
         '#ma-app-icon .ma-app-dot.on{display:flex !important;}',
         
@@ -332,36 +329,54 @@
     }, 'bindFabDrag');
   }
 
-  // 【绝对稳定】彻底重构图标的注入
+  // 【核心修复】完美寄生克隆，借壳上市
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
+      
+      // 找一个可见的原生节点作为模版
       var src = natives[0];
+      var clone = src.cloneNode(true);
       
-      // 自己完全重建结构，不依赖原网页内部，避免被图片撑爆
-      var clone = document.createElement('div');
-      clone.className = src.className || 'app'; 
-      clone.setAttribute('data-ma-clone', '1');
-      clone.id = 'ma-app-icon';
+      if (clone.id) clone.removeAttribute('id');
+      var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
       
-      var iconBox = document.createElement('div');
-      iconBox.className = 'ma-app-custom-icon';
-      iconBox.setAttribute('data-ma-icon', '1');
+      // 找到内部的图标容器和文字容器
+      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]') || clone.firstElementChild;
+      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]') || clone.lastElementChild;
+
+      // 处理文字：把文字改成“审核”
+      if (innerName) {
+          innerName.textContent = DB.settings.appName || '审核';
+          innerName.setAttribute('data-ma-name', '1');
+      }
+
+      // 处理图标：在原容器里覆盖一个专属背景层
+      if (innerIcon) {
+          // 保留原始容器的尺寸/圆角，清空其原有背景
+          innerIcon.style.backgroundColor = 'transparent';
+          innerIcon.style.backgroundImage = 'none';
+          innerIcon.style.overflow = 'hidden';
+          innerIcon.setAttribute('data-ma-icon', '1');
+          
+          var imgWrap = document.createElement('div');
+          imgWrap.className = 'ma-app-custom-img-wrap';
+          imgWrap.setAttribute('data-ma-img-wrap', '1');
+          innerIcon.appendChild(imgWrap);
+          APP_ICON_IMG_EL = imgWrap;
+      } else {
+          // 极端兜底，如果没有内部结构
+          APP_ICON_IMG_EL = clone;
+      }
+
+      // 插入角标
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
       
-      var nameEl = document.createElement('div');
-      nameEl.setAttribute('data-ma-name', '1');
-      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;';
-      
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot';
-      
-      clone.appendChild(iconBox);
-      clone.appendChild(nameEl);
-      clone.appendChild(dot);
+      clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
       APP_ICON_EL = clone;
-      APP_ICON_IMG_EL = iconBox;
       
       clone.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); openPanel(); });
       
@@ -423,17 +438,27 @@
         var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
         if (nameEl) {
             nameEl.textContent = s.appName || '审核';
-            nameEl.style.color = s.appColor || '#333333';
+            // 如果没自定义，就清空行内样式，完美跟随原生主题
+            if (s.appColor) nameEl.style.color = s.appColor;
+            else nameEl.style.color = ''; 
         }
         
-        var holder = APP_ICON_IMG_EL;
+        var holder = APP_ICON_EL.querySelector('[data-ma-img-wrap]');
+        var innerIcon = APP_ICON_EL.querySelector('[data-ma-icon]');
+        
         if (holder) {
             if (s.appImage) {
                 holder.style.backgroundImage = 'url("' + s.appImage + '")';
-                holder.style.backgroundColor = 'transparent';
             } else {
                 holder.style.backgroundImage = 'none';
-                holder.style.backgroundColor = s.appIconColor || '#f5f5f5'; // 兜底背景色
+            }
+        }
+        
+        if (innerIcon) {
+            if (!s.appImage && s.appIconColor) {
+                innerIcon.style.backgroundColor = s.appIconColor;
+            } else if (!s.appImage) {
+                innerIcon.style.backgroundColor = ''; // 恢复原生
             }
         }
       }
@@ -780,10 +805,12 @@
     
     h += '<div class="ma-set-block"><div class="ma-set-title">审核图标外观</div>';
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">名称</span><input type="text" class="ma-input" id="ma-set-app-name" maxlength="6" value="' + esc(s.appName || '审核') + '"></div>';
-    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#333333') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + esc(s.appColor) + '</span></div>';
+    h += '<div class="ma-row"><span class="ma-label" style="width:52px;">文字色</span><input type="color" id="ma-set-app-color" value="' + esc(s.appColor || '#D6459D') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appColor || '跟随原版') + '</span>';
+    if (s.appColor) h += '<button class="ma-btn sm" id="ma-set-app-color-reset" style="margin-left:auto;">默认</button>';
+    h += '</div>';
     
     h += '<div class="ma-row"><span class="ma-label" style="width:52px;">图标色</span><input type="color" id="ma-set-app-icon-color" value="' + esc(s.appIconColor || '#f0f0f0') + '" style="width:46px;height:28px;border:1px solid #eee;border-radius:6px;padding:0;cursor:pointer;"><span style="font-size:11px;color:#bbb;">' + (s.appIconColor || '默认') + '</span>';
-    if (s.appIconColor) h += '<button class="ma-btn sm" id="ma-set-app-icon-reset" style="margin-left:auto;">恢复默认</button>';
+    if (s.appIconColor) h += '<button class="ma-btn sm" id="ma-set-app-icon-reset" style="margin-left:auto;">默认</button>';
     h += '</div>';
     
     h += '<div class="ma-row"><div class="ma-thumb square" id="ma-set-app-thumb" style="' + (s.appImage ? 'background-image:url(&quot;' + s.appImage + '&quot;);' : 'background:#f5f5f5;') + '"></div><button class="ma-btn sm" id="ma-set-app-upload">上传图片</button>' + (s.appImage ? '<button class="ma-btn sm danger" id="ma-set-app-clear">移除</button>' : '') + '</div></div>';
@@ -808,10 +835,13 @@
         appNameInp.addEventListener('input', function () { safe(function () { DB.settings.appName = appNameInp.value.trim() || '审核'; applyAppearance(); }, 'appNameIn'); });
         appNameInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
       }
+      
       var appColorInp = body.querySelector('#ma-set-app-color'); if (appColorInp) {
         appColorInp.addEventListener('input', function () { safe(function () { DB.settings.appColor = appColorInp.value; applyAppearance(); }, 'appColorIn'); });
         appColorInp.addEventListener('change', function () { saveData(); renderPanelBody(); });
       }
+      var appColorReset = body.querySelector('#ma-set-app-color-reset');
+      if (appColorReset) appColorReset.addEventListener('click', function () { safe(function () { DB.settings.appColor = ''; saveData(); applyAppearance(); renderPanelBody(); toast('文字颜色已恢复默认'); }, 'appColorReset'); });
       
       var appIconColorInp = body.querySelector('#ma-set-app-icon-color'); if (appIconColorInp) {
         appIconColorInp.addEventListener('input', function () { safe(function () { DB.settings.appIconColor = appIconColorInp.value; applyAppearance(); }, 'appIconColorIn'); });
