@@ -1,5 +1,5 @@
 /* ============================================================================
- * my-new-feature.js 终极稳定版 (Self-Healing 机制，无视刷新/框架覆盖)
+ * my-new-feature.js 绝对稳定版 (不再克隆图标，暴力重构布局，绝不丢失)
  * ========================================================================== */
 (function () {
   'use strict';
@@ -69,30 +69,28 @@
   function findCard(cid) { try { for (var i = 0; i < DB.groups.length; i++) { var g = DB.groups[i]; for (var j = 0; j < g.cards.length; j++) if (g.cards[j].id === cid) return { group: g, card: g.cards[j] }; } } catch (e) {} return null; }
   function pushHistory(rec) { safe(function () { DB.history.push({ id: uid('h'), sender: rec.sender || SENDER_MJ, action: rec.action || 'add', text: rec.text || '', result: rec.result || 'agree', time: Date.now(), extra: rec.extra || '' }); if (DB.history.length > HISTORY_LIMIT) DB.history = DB.history.slice(-HISTORY_LIMIT); saveData(); }, 'pushHistory'); }
 
+  // 【绝对稳定】气泡注入方案
   function injectBubbleToChat(text) {
     try {
       var now = Date.now();
       var newMsg = { side: 'in', text: text, time: now };
       INJECTED_MSGS.push(newMsg); if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
 
+      // 1. 写入底层数据（确保刷新后原网页能渲染）
       var msgs = readChatMsgs(); msgs.push(newMsg); localStorage.setItem(LS_KEY_CHAT, JSON.stringify(msgs));
       
       var chatBody = document.getElementById('chat-body');
-      if (!chatBody) return true;
+      if (!chatBody) return true; // 如果不在聊天页，只写数据，进去时会渲染
 
-      var blackList = ['语音', '通话', '红包', '领取', '撤回', '礼物', '转账', '词典', '连发', '情绪', '心意', '意图'];
+      // 2. 寻找最纯净的模版
       var templateNode = null;
       var children = Array.from(chatBody.children);
-
       for (var i = children.length - 1; i >= 0; i--) {
         var el = children[i], cls = (el.className || '').toLowerCase();
-        if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0) continue;
+        if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0 || cls.indexOf('self') >= 0) continue;
         var txt = el.textContent || '';
-        var isBlack = false;
-        for (var b = 0; b < blackList.length; b++) { if (txt.indexOf(blackList[b]) >= 0) { isBlack = true; break; } }
-        if (isBlack) continue; 
-        if (el.querySelector('.app-name, .icon, img, svg') && txt.trim().length < 5) continue;
-        templateNode = el; break;
+        if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('词典') >= 0) continue; 
+        if (txt.trim().length > 0) { templateNode = el; break; }
       }
 
       var bubbleEl;
@@ -100,12 +98,16 @@
           bubbleEl = templateNode.cloneNode(true);
           if (bubbleEl.id) bubbleEl.removeAttribute('id');
           var nodesWithId = bubbleEl.querySelectorAll('[id]'); for (var k = 0; k < nodesWithId.length; k++) nodesWithId[k].removeAttribute('id');
+          
+          // 暴力清理可能干扰布局的类名
           if (bubbleEl.classList) { bubbleEl.classList.remove('msg-out', 'me', 'right', 'self'); bubbleEl.classList.add('msg-in', 'left'); }
           bubbleEl.style.alignSelf = 'flex-start'; bubbleEl.style.marginLeft = '0'; bubbleEl.style.marginRight = 'auto';
+          
           var walker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT, null, false), maxLen = 0, targetTextNode = null, tn;
           while ((tn = walker.nextNode())) { var len = tn.nodeValue.trim().length; if (len > maxLen) { maxLen = len; targetTextNode = tn; } }
           if (targetTextNode) targetTextNode.nodeValue = text; else bubbleEl.innerText = text;
       } else {
+          // 兜底：完全自建
           bubbleEl = document.createElement('div');
           bubbleEl.className = 'msg in left';
           bubbleEl.style.cssText = 'display:flex; margin: 10px 15px; align-self: flex-start; clear: both;';
@@ -121,6 +123,7 @@
     } catch (err) { return false; }
   }
 
+  // 刷新或重进补气泡
   function checkAndRepairChat() {
     var chatBody = document.getElementById('chat-body');
     if (!chatBody || INJECTED_MSGS.length === 0) return;
@@ -128,18 +131,14 @@
     if (injectedNodes.length === INJECTED_MSGS.length) return;
     
     for (var i = 0; i < injectedNodes.length; i++) injectedNodes[i].remove();
-    var blackList = ['语音', '通话', '红包', '领取', '撤回', '礼物', '转账', '词典', '连发', '情绪', '心意', '意图'];
     var templateNode = null;
     var children = Array.from(chatBody.children);
     for (var i = children.length - 1; i >= 0; i--) {
       var el = children[i], cls = (el.className || '').toLowerCase();
       if (cls.indexOf('out') >= 0 || cls.indexOf('me') >= 0 || cls.indexOf('right') >= 0) continue;
       var txt = el.textContent || '';
-      var isBlack = false;
-      for (var b = 0; b < blackList.length; b++) { if (txt.indexOf(blackList[b]) >= 0) { isBlack = true; break; } }
-      if (isBlack) continue; 
-      if (el.querySelector('.app-name, .icon, img, svg') && txt.trim().length < 5) continue;
-      templateNode = el; break;
+      if (txt.indexOf('语音') >= 0 || txt.indexOf('通话') >= 0 || txt.indexOf('词典') >= 0) continue; 
+      if (txt.trim().length > 0) { templateNode = el; break; }
     }
 
     for (var m = 0; m < INJECTED_MSGS.length; m++) {
@@ -332,39 +331,54 @@
     }, 'bindFabDrag');
   }
 
+  // 【绝对稳定】完全重构图标的注入
   function injectAppIcon() {
     return safe(function () {
       if (APP_ICON_EL && document.body.contains(APP_ICON_EL)) return true;
       var natives = document.querySelectorAll('.app:not([data-ma-clone])'); if (!natives.length) return false;
       var src = natives[0];
-      var clone = null; try { clone = src.cloneNode(true); } catch (e) { return false; }
-      if (clone.id) clone.removeAttribute('id');
-      var ids = clone.querySelectorAll('[id]'); for (var k = 0; k < ids.length; k++) ids[k].removeAttribute('id');
-      clone.removeAttribute('style'); var styled = clone.querySelectorAll('[style]'); for (var si = 0; si < styled.length; si++) styled[si].removeAttribute('style');
-      try { var walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false); var textNodes = [], tn; while ((tn = walker.nextNode())) textNodes.push(tn); for (var ti = 0; ti < textNodes.length; ti++) textNodes[ti].nodeValue = ''; } catch (e6) {}
       
-      var innerIcon = clone.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
-      var innerName = clone.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
+      // 我们自己重建整个 app 结构，杜绝原网页残留
+      var clone = document.createElement('div');
+      clone.className = src.className; 
+      clone.classList.add('ma-cloned-app');
+      clone.removeAttribute('id');
       
-      if (innerIcon) {
+      // 内部结构：绝对定位的背景图 + 文字
+      var iconWrap = document.createElement('div');
+      iconWrap.setAttribute('data-ma-icon', '1');
+      iconWrap.style.cssText = 'width:100%; height:100%; border-radius: 22%; background-size: cover; background-position: center; background-repeat: no-repeat; transition: background-color 0.2s; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center;';
+      
+      // 名字
+      var nameEl = document.createElement('div');
+      nameEl.setAttribute('data-ma-name', '1');
+      nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#333; margin-top: 6px;';
+      
+      // 角标
+      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; 
+
+      // 如果原网页有特定的包裹层，尽量利用它
+      var innerIcon = src.querySelector('.app-icon,.icon,img,svg,[class*="icon"]');
+      var innerName = src.querySelector('.app-name,.app-title,.app-label,.name,.title,.label,[class*="name"],[class*="label"],[class*="title"]');
+      
+      if (innerIcon && innerName) {
+          // 有原生结构，直接清空内部
+          clone.innerHTML = '';
+          innerIcon.innerHTML = ''; // 清空原生 icon
+          innerIcon.appendChild(iconWrap); // 塞入我们的自适应背景
+          innerName.innerHTML = ''; // 清空原生名字
+          innerName.appendChild(nameEl);
+          clone.appendChild(innerIcon);
+          clone.appendChild(innerName);
           APP_ICON_IMG_EL = innerIcon;
-          APP_ICON_IMG_EL.setAttribute('data-ma-icon', '1');
       } else {
-          APP_ICON_IMG_EL = document.createElement('div');
-          APP_ICON_IMG_EL.className = 'ma-custom-icon-wrap';
-          APP_ICON_IMG_EL.setAttribute('data-ma-icon', '1');
-          APP_ICON_IMG_EL.style.cssText = 'width:36px;height:36px;margin:0 auto 4px;border-radius:10px;background-size:cover;background-position:center;transition:background-color 0.2s;';
-          clone.insertBefore(APP_ICON_IMG_EL, clone.firstChild);
+          // 如果找不到，直接全自定义
+          clone.appendChild(iconWrap);
+          clone.appendChild(nameEl);
+          APP_ICON_IMG_EL = iconWrap;
       }
 
-      if (innerName) {
-          innerName.setAttribute('data-ma-name', '1');
-      } else {
-          var span = document.createElement('div'); span.setAttribute('data-ma-name', '1');
-          clone.appendChild(span);
-      }
-
-      var dot = document.createElement('i'); dot.className = 'ma-app-dot'; clone.appendChild(dot);
+      clone.appendChild(dot);
       clone.id = 'ma-app-icon'; clone.setAttribute('data-ma-clone', '1');
       
       var grid = document.querySelector('.app-grid'); if (grid) grid.appendChild(clone);
@@ -375,20 +389,18 @@
     }, 'injectAppIcon', false);
   }
 
-  // 【核心修复】自愈机制：使用 MutationObserver 监听九宫格，被覆盖了立刻重新插入
+  // 自愈机制：一旦被原网页框架删除，立刻重建
   function startAppIconGuard() {
     safe(function () {
       injectAppIcon();
-
-      var observer = new MutationObserver(function (mutations) {
-        // 如果我们的图标不见了，立刻补上
+      
+      var observer = new MutationObserver(function () {
         if (!APP_ICON_EL || !document.body.contains(APP_ICON_EL)) {
           APP_ICON_EL = null;
           APP_ICON_IMG_EL = null;
           injectAppIcon();
         }
       });
-      
       observer.observe(document.body, { childList: true, subtree: true });
     }, 'startAppIconGuard');
   }
@@ -429,27 +441,17 @@
         var nameEl = APP_ICON_EL.querySelector('[data-ma-name]');
         if (nameEl) {
             nameEl.textContent = s.appName || '审核';
-            nameEl.style.cssText = 'font-size:12px;line-height:1.4;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:' + (s.appColor || '#333333') + ';';
+            nameEl.style.color = s.appColor || '#333333';
         }
         
         var holder = APP_ICON_EL.querySelector('[data-ma-icon]');
         if (holder) {
             if (s.appImage) {
-                if (holder.tagName === 'IMG') holder.src = s.appImage;
-                else {
-                    holder.style.backgroundImage = 'url("' + s.appImage + '")';
-                    holder.style.backgroundSize = 'cover';
-                    holder.style.backgroundPosition = 'center';
-                }
+                holder.style.backgroundImage = 'url("' + s.appImage + '")';
+                holder.style.backgroundColor = 'transparent';
             } else {
-                if (holder.tagName === 'IMG') holder.removeAttribute('src'); 
-                else if (holder.tagName !== 'SVG') holder.style.backgroundImage = 'none';
-            }
-            
-            if (!s.appImage && s.appIconColor) {
-                if (holder.tagName !== 'IMG' && holder.tagName !== 'SVG') holder.style.backgroundColor = s.appIconColor;
-            } else {
-                if (holder.tagName !== 'IMG' && holder.tagName !== 'SVG') holder.style.backgroundColor = '';
+                holder.style.backgroundImage = 'none';
+                holder.style.backgroundColor = s.appIconColor || '#f5f5f5'; // 兜底背景色
             }
         }
       }
@@ -464,7 +466,7 @@
       var a = APP_ICON_EL ? APP_ICON_EL.querySelector('.ma-app-dot') : null; 
       if (a) { 
         if (n > 0) { a.textContent = n > 99 ? '99+' : n; a.classList.add('on'); a.style.cssText = ''; } 
-        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } 
+        else { a.textContent = ''; a.classList.remove('on'); a.style.cssText = 'display:none !important;'; } // 彻底隐藏空圈
       } 
       var t = PANEL ? PANEL.querySelector('.ma-tab[data-tab="pending"] .ma-tab-badge') : null; 
       if (t) { t.textContent = n > 99 ? '99+' : String(n); t.style.display = n > 0 ? 'inline-block' : 'none'; } 
