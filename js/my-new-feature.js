@@ -2450,13 +2450,18 @@
               const card = cat.cards.find(function (c) { return c.id === cardId; });
               if (!card) return;
               if (op === 'send') {
-                const fn = window.sendAuditCard;
-                if (typeof fn === 'function') {
-                  fn(card.text, 'in');
-                  toast('已发送到聊天');
-                } else {
-                  toast('发送能力未就绪', '#b45309');
-                }
+  e.stopPropagation();
+  const fn = window.sendAuditCard;
+  if (typeof fn === 'function') {
+    fn(card.text, 'in');
+    toast('已发送到聊天');
+  } else {
+    toast('发送能力未就绪', '#b45309');
+  }
+  // 发送完成，强制保持字卡库面板不消失，刷新UI防止状态错乱（可选增强）
+  refresh();
+  return;
+}
               } else if (op === 'edit') {
                 const text = prompt('编辑字卡内容：', card.text);
                 if (text == null) return;
