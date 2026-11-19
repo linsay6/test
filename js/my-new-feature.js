@@ -2018,27 +2018,25 @@
         return null;
       }
     }
-    function markTabActive(active) {
-      try {
-        document.querySelectorAll('[data-ccsel]').forEach(function (el) {
-          if (el.matches(TAB_SELECTOR)) {
-            el.classList.toggle('cc-tab-active', !!active);
-          } else if (active) {
-            el.classList.remove('cc-tab-active');
-          }
-        });
-        const tab = document.querySelector(TAB_SELECTOR);
-        if (tab) {
-          let badge = tab.querySelector('.cc-tab-badge');
-          if (!badge) {
-            badge = document.createElement('span');
-            badge.className = 'cc-tab-badge';
-            tab.appendChild(badge);
-          }
-          badge.textContent = String(countAllCards());
-        }
-      } catch (e) {}
+   function markTabActive(active) {
+  try {
+    const ourTab = document.querySelector(TAB_SELECTOR);
+    if(ourTab){
+      ourTab.classList.toggle('cc-tab-active', !!active);
     }
+    // 重点：我们只管理自己的tab，**绝不碰原生 custom / preset 的激活类**，原生由原页面脚本自行管理
+    const tab = ourTab;
+    if (tab) {
+      let badge = tab.querySelector('.cc-tab-badge');
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'cc-tab-badge';
+        tab.appendChild(badge);
+      }
+      badge.textContent = String(countAllCards());
+    }
+  } catch (e) {}
+}
     function showPane() {
       try {
         const pane = ensurePane();
@@ -2063,25 +2061,38 @@
         console.warn('[Audit] Tab 交还失败', e);
       }
     }
-    function bindTabSwitch() {
+  function bindTabSwitch() {
   try {
     document.addEventListener('click', function (e) {
-      const tab = e.target.closest('[data-ccsel]');
-      // 点击【我方tab】
-      if (tab && tab.matches(TAB_SELECTOR)) {
+      // 获取点击的tab（原生tab是 data-ccsect，我们的是 data-ccsel="audit"）
+      const ourTab = e.target.closest('[data-ccsel="audit"]');
+      const nativeCustomTab = e.target.closest('[data-ccsect="custom"]');
+      const nativePresetTab = e.target.closest('[data-ccsect="preset"]');
+
+      // 情况1：点击【审核报告字卡（我们自己的tab）】
+      if (ourTab) {
         showPane();
+        // 清除原生两个tab的激活黑底
+        document.querySelectorAll('[data-ccsect="custom"],[data-ccsect="preset"]').forEach(t=>{
+          t.classList.remove('cc-tab-active');
+        })
         return;
       }
-      // 只要点击不在我方tab元素范围内，就执行交还逻辑
-      const clickInsideOurTab = e.target.closest(TAB_SELECTOR);
+
+      // 情况2：点击原生【可自定义字卡】或者【系统预设字卡】
+      if (nativeCustomTab || nativePresetTab) {
+        hidePane();
+        // 清除我们audit标签的激活样式
+        document.querySelector('[data-ccsel="audit"]')?.classList.remove('cc-tab-active');
+        // 原生自己的sect交给原脚本自己控制，不再强制全部打开
+        return;
+      }
+
+      // 情况3：点击tab栏以外区域
+      const clickInsideOurTab = e.target.closest('[data-ccsel="audit"]');
       if (!clickInsideOurTab) {
         hidePane();
-        // 恢复全部原生sect
-        document.querySelectorAll('[id^="cc-sect-"]').forEach(el => {
-          if(el.id !== PANE_ID) {
-            el.hidden = false;
-          }
-        });
+        document.querySelector('[data-ccsel="audit"]')?.classList.remove('cc-tab-active');
       }
     }, false);
   } catch (e) {
