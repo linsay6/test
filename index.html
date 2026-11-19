@@ -11484,6 +11484,16 @@ font-size: 11.5px; color: var(--muted, #8a8a8a); cursor: pointer; touch-action: 
 <div class="app-ico"><svg viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 012-2h12a2 2 0 012 2v16"/><path d="M4 21h16"/><path d="M10 21v-6h4v6"/></svg></div>
 <div class="app-name">此间</div>
 </div>
+   <!-- 专属审核图标 -->
+<div class="app" data-app="audit" data-desk-widget="app-audit" onclick="if(window.openAuditPanel) window.openAuditPanel();">
+  <div class="app-ico">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 20h9"></path>
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+    </svg>
+  </div>
+  <div class="app-name">审核</div>
+</div>
 </div>
       </div><!-- /page-slide 第二页 -->
 
@@ -11580,10 +11590,12 @@ font-size: 11.5px; color: var(--muted, #8a8a8a); cursor: pointer; touch-action: 
       <div class="card-tabs cc-top-tabs">
         <button class="cc-tab sel" data-ccsect="custom">可自定义字卡</button>
         <button class="cc-tab" data-ccsect="preset">系统预设字卡</button>
+           <button class="cc-tab" data-ccsel="audit">审核报告字卡</button>
       </div>
       <div class="tc-search-wrap" style="padding:0 12px 8px">
         <input type="text" id="chatcard-search" class="tc-input" placeholder="搜索字卡内容…" style="width:100%">
       </div>
+         <div class="cc-sect-body" id="cc-sect-audit" hidden></div>
       <div class="cc-sect-body" id="cc-sect-custom">
       <!-- v3.11.x：自定义聊天字卡拆双作用域——公用（全桌面共享）/ 专属（仅当前桌面联系人） -->
       <div class="chat-item glass" id="li-custom-cards-public">
@@ -22968,6 +22980,6 @@ window.__mochiBootRetry = function () { try { location.reload(); } catch (e) {} 
        两者都必须存在；构建产物在 </html> 后还会再写一份 __MOCHI_EOF__ 兜底注释。 -->
   <span id="mochi-html-eof" hidden aria-hidden="true"></span>
 <!-- __MOCHI_EOF__ -->
-</body>
+ </body>
 </html>
 <!-- __MOCHI_EOF__ mvun297n -->
