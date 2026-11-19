@@ -1618,25 +1618,25 @@
                     if (sa.borderRadius) avatarRadius = sa.borderRadius;
                 }
 
-                var wrapper = document.createElement('div');
+                                var wrapper = document.createElement('div');
                 wrapper.setAttribute('data-ma-injected', '1');
-                wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 15px; padding: 10px; width: 100%; box-sizing: border-box;';
+                wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 14px; padding: 0 10px; width: 100%; box-sizing: border-box;';
 
                 // 左侧列：包裹头像和时间戳
                 var leftCol = document.createElement('div');
-                leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 12px; flex-shrink: 0; width: 40px;';
+                leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 10px; flex-shrink: 0; width: 40px;';
 
                 var avatarEl;
                 if (sampleAvatar) {
                     avatarEl = sampleAvatar.cloneNode();
-                    avatarEl.style.cssText = 'width: 38px; height: 38px; border-radius: ' + avatarRadius + '; object-fit: cover;';
+                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; object-fit: cover;';
                 } else {
                     avatarEl = document.createElement('div');
-                    avatarEl.style.cssText = 'width: 38px; height: 38px; border-radius: ' + avatarRadius + '; background: #ddd;';
+                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; background: #ddd;';
                 }
 
                 var timeEl = document.createElement('div');
-                timeEl.style.cssText = 'font-size: 10px; color: #999; margin-top: 6px; white-space: nowrap; transform: scale(0.9);';
+                timeEl.style.cssText = 'font-size: 10px; color: #999; margin-top: 4px; white-space: nowrap;';
                 var d = new Date();
                 timeEl.textContent = (d.getHours()<10?'0':'') + d.getHours() + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ':' + (d.getSeconds()<10?'0':'') + d.getSeconds();
 
@@ -1651,7 +1651,6 @@
                 wrapper.appendChild(leftCol);
                 wrapper.appendChild(bubble);
                 chatBody.appendChild(wrapper);
-
                 try { chatBody.scrollTop = chatBody.scrollHeight; window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
                 renderSuccess = true;
             } catch (domErr) {}
@@ -1705,24 +1704,24 @@
             for (var m = 0; m < INJECTED_MSGS.length; m++) {
                 var msg = INJECTED_MSGS[m];
 
-                var wrapper = document.createElement('div');
+                                var wrapper = document.createElement('div');
                 wrapper.setAttribute('data-ma-injected', '1');
-                wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 15px; padding: 10px; width: 100%; box-sizing: border-box;';
+                wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 14px; padding: 0 10px; width: 100%; box-sizing: border-box;';
 
                 var avatarEl;
                 if (sampleAvatar) {
                     avatarEl = sampleAvatar.cloneNode();
-                    avatarEl.style.cssText = 'width: 38px; height: 38px; border-radius: ' + currentAvatarRadius + '; object-fit: cover;';
+                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; object-fit: cover;';
                 } else {
                     avatarEl = document.createElement('div');
-                    avatarEl.style.cssText = 'width: 38px; height: 38px; border-radius: ' + currentAvatarRadius + '; background: #ddd;';
+                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; background: #ddd;';
                 }
 
                 var leftCol = document.createElement('div');
-                leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 12px; flex-shrink: 0; width: 40px;';
+                leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 10px; flex-shrink: 0; width: 40px;';
 
                 var timeEl = document.createElement('div');
-                timeEl.style.cssText = 'font-size: 10px; color: #999; margin-top: 6px; white-space: nowrap; transform: scale(0.9);';
+                timeEl.style.cssText = 'font-size: 10px; color: #999; margin-top: 4px; white-space: nowrap;';
                 var d = new Date(msg.time);
                 timeEl.textContent = (d.getHours()<10?'0':'') + d.getHours() + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ':' + (d.getSeconds()<10?'0':'') + d.getSeconds();
 
