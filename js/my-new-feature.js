@@ -466,8 +466,8 @@
       box-sizing: border-box; padding: 2px 0 12px;
     }
     #cc-sect-audit[hidden] { display: none !important; }
-    [data-ccsel].cc-tab-active,
-    .cc-tab-active {
+        /* 重点：只给我们新增的审核tab生效active样式！原生tab不受这个css影响！ */
+    [data-ccsel="audit"].cc-tab-active {
       background: #000 !important;
       color: #fff !important;
       border-color: #000 !important;
@@ -2019,15 +2019,17 @@
         return null;
       }
     }
-    function markTabActive(active) {
+            function markTabActive(isOurTabActive) {
       try {
+        // 清除全部tab的激活样式
         document.querySelectorAll('[data-ccsel]').forEach(function (el) {
-          if (el.matches(TAB_SELECTOR)) {
-            el.classList.toggle('cc-tab-active', !!active);
-          } else if (active) {
-            el.classList.remove('cc-tab-active');
-          }
+          el.classList.remove('cc-tab-active');
         });
+        // 仅当选中我们的审核tab，才给它加上激活黑底
+        if (isOurTabActive) {
+          const ourTab = document.querySelector(TAB_SELECTOR);
+          if (ourTab) ourTab.classList.add('cc-tab-active');
+        }
         const tab = document.querySelector(TAB_SELECTOR);
         if (tab) {
           let badge = tab.querySelector('.cc-tab-badge');
@@ -2040,12 +2042,12 @@
         }
       } catch (e) {}
     }
-    function showPane() {
+        function showPane() {
       try {
         const pane = ensurePane();
         if (!pane) return;
+        // 原生全部隐藏，只展示审核面板
         document.querySelectorAll('[id^="cc-sect-"]').forEach(function (el) {
-          if (el === pane) return;
           el.hidden = true;
         });
         pane.hidden = false;
@@ -2055,40 +2057,36 @@
         console.warn('[Audit] Tab 切换失败', e);
       }
     }
-    function hidePane() {
+        function hidePane() {
       try {
         const pane = document.getElementById(PANE_ID);
         if (pane) pane.hidden = true;
         markTabActive(false);
+        // 交还控制权：全部原生面板恢复显示，交给网站原生tab逻辑自己去控制切换
+        document.querySelectorAll('[id^="cc-sect-"]').forEach(el => {
+          el.hidden = false;
+        });
       } catch (e) {
         console.warn('[Audit] Tab 交还失败', e);
       }
     }
-    function bindTabSwitch() {
-  try {
-    document.addEventListener('click', function (e) {
-      const tab = e.target.closest('[data-ccsel]');
-      // 点击【我方tab】
-      if (tab && tab.matches(TAB_SELECTOR)) {
-        showPane();
-        return;
-      }
-      // 只要点击不在我方tab元素范围内，就执行交还逻辑
-      const clickInsideOurTab = e.target.closest(TAB_SELECTOR);
-      if (!clickInsideOurTab) {
-        hidePane();
-        // 恢复全部原生sect
-        document.querySelectorAll('[id^="cc-sect-"]').forEach(el => {
-          if(el.id !== PANE_ID) {
-            el.hidden = false;
+           function bindTabSwitch() {
+      try {
+        document.addEventListener('click', function (e) {
+          const tab = e.target.closest('[data-ccsel]');
+          if (!tab) return;
+          // 点击【审核报告字卡】我们自己的tab
+          if (tab.matches(TAB_SELECTOR)) {
+            showPane();
+            return;
           }
-        });
+          // 点击原生tab：执行交还，不再重复写显示原生面板（hidePane内部已经处理）
+          hidePane();
+        }, false);
+      } catch (e) {
+        console.warn('[Audit] Tab切换绑定失败', e);
       }
-    }, false);
-  } catch (e) {
-    console.warn('[Audit] Tab切换绑定失败', e);
-  }
-}
+    }
 
     /* ---------------- 字卡库 UI ---------------- */
     function buildHTML() {
