@@ -149,7 +149,9 @@ res: [/^sfx-/, /^notice-/, /^onboarding/, /^guide-/, /^splash-/, /^backup-/, /^l
   route: "page-audit",
   desc: "梦角卡片审核管理",
   type: "page",
-  group: "桌面功能"
+  group: "桌面功能",
+  scope: "both",
+  res: []
 }
 ];
 var FD_MOUNTS = {
