@@ -143,12 +143,15 @@ res: [/^call-mini-/, /^call-bg$/, /^call-half-bg$/, /^call-active$/, /^call-hold
 desc: '音效总开关与统一模式、开屏公告已读、引导完成标记、数据备份提醒时间',
 res: [/^sfx-/, /^notice-/, /^onboarding/, /^guide-/, /^splash-/, /^backup-/, /^last-export$/, /^install-/, /^theme-mode$/, /^accent-color$/, /^bg-keep/, /^bg-notify/, /^ver-update-notify$/] },
 {
-  id: "audit",  name: "梦角审核",  icon: "📋",  page: "page-audit",
+  id: "audit",
+  name: "梦角审核",
+  icon: "📋",
+  page: "page-audit",
   desc: "梦角卡片审核管理",
   type: "page",
   group: "桌面与系统",
   scope: "both",
-  res: []
+  res: [/^audit-/],
 }
 ];
 var FD_MOUNTS = {
