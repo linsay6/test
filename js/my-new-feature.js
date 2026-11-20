@@ -546,6 +546,17 @@ window.MY_AUDIT = {
     let engineTimer = null;
     let engineLock = false;
     let observerTimer = null;
+    // 组件注册注册表，用来管理注入的面板，避免重复创建、事件冲突
+const injectedRegistry = [];
+function registerInjectedItem(el, type) {
+  injectedRegistry.push({ el, type });
+}
+function unregisterAllByType(type) {
+  const list = injectedRegistry.filter(item => item.type === type);
+  list.forEach(item => {
+    if(item.el && item.el.parentNode) item.el.remove();
+  });
+}
 
     /* ---------------- 图标 ---------------- */
     function getDeskContainer() {
