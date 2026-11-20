@@ -453,6 +453,9 @@
     }
     .audit-cropper-mask.circle { border-radius: 50%; }
     .audit-cropper-mask.square { border-radius: 14px; }
+    /* 同步裁剪外层预览容器，和蒙版圆角保持一致，视觉无缝 */
+    .audit-cropper-box { border-radius: 14px; }
+    .audit-cropper-canvas-wrap { border-radius: 14px; overflow: hidden; }
     .audit-cropper-slider-wrap { padding: 0 10px; margin-bottom: 14px; }
     .audit-cropper-slider-wrap input[type="range"] { width: 100%; }
     .audit-cropper-btns { display: flex; gap: 8px; justify-content: center; }
