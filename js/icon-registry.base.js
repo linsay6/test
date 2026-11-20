@@ -49,4 +49,43 @@ function updateBadge(id, text) {
     el.textContent = text;
     el.style.display = text ? "" : "none";
 }
+// 自动注入图标样式，加到icon-registry.base.js最后
+(function injectIconStyle(){
+  const styleId = "audit-app-icon-style";
+  if(document.getElementById(styleId)) return;
+  const style = document.createElement("style");
+  style.id = styleId;
+  style.textContent = `
+.audit-app-icon {
+    position: relative;
+    width: 64px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    gap:4px;
+}
+.audit-app-icon .icon-svg {
+    width: 40px;
+    height:40px;
+}
+.audit-app-icon .icon-name {
+    font-size: 12px;
+    text-align: center;
+}
+.audit-app-icon .icon-badge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background: #f56c6c;
+    color: #fff;
+    font-size:10px;
+    padding: 1px 4px;
+    border-radius: 6px;
+    min-width: 14px;
+    text-align: center;
+}
+  `;
+  document.head.appendChild(style);
+})();
 
