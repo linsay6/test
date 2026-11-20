@@ -141,15 +141,15 @@ desc: '通话背景与来电弹窗背景、通话小框位置与开关、通话�
 res: [/^call-mini-/, /^call-bg$/, /^call-half-bg$/, /^call-active$/, /^call-hold$/] },
 { id: 'sys', name: '音效与系统设置', group: '桌面与系统', scope: 'both', page: 'page-sfx-settings',
 desc: '音效总开关与统一模式、开屏公告已读、引导完成标记、数据备份提醒时间',
-res: [/^sfx-/, /^notice-/, /^onboarding/, /^guide-/, /^splash-/, /^backup-/, /^last-export$/, /^install-/, /^theme-mode$/, /^accent-color$/, /^bg-keep/, /^bg-notify/, /^ver-update-notify$/] }
-  ,
+res: [/^sfx-/, /^notice-/, /^onboarding/, /^guide-/, /^splash-/, /^backup-/, /^last-export$/, /^install-/, /^theme-mode$/, /^accent-color$/, /^bg-keep/, /^bg-notify/, /^ver-update-notify$/] },
 {
   id: "audit",
   name: "梦角审核",
   icon: "📋",
   route: "page-audit",
   desc: "梦角卡片审核管理",
-  type: "page"
+  type: "page",
+  group: "桌面功能"
 }
 ];
 var FD_MOUNTS = {
