@@ -146,7 +146,7 @@ res: [/^sfx-/, /^notice-/, /^onboarding/, /^guide-/, /^splash-/, /^backup-/, /^l
   id: "audit",
   name: "梦角审核",
   icon: "📋",
-  route: "page-audit",
+  page: "page-audit",
   desc: "梦角卡片审核管理",
   type: "page",
   group: "桌面功能",
