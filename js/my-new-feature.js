@@ -236,17 +236,6 @@
     },
     STORAGE: { chat: STORAGE_CHAT_KEY, audit: STORAGE_AUDIT_KEY }
   };
-  // 对外统一API工具箱
-window.MY_AUDIT = {
-  getMergeCardPool: null,
-  getMyAuditCardsRaw: getMyAuditCardsRaw,
-  myAuditCardsToGroups: myAuditCardsToGroups,
-  mergeMyAuditGroups: mergeMyAuditGroups,
-  reload: function () {
-    window.__MY_AUDIT__.reload();
-    refresh();
-  }
-};
 
   injectCSS(`
     /* ---------- 审核图标与角标 ---------- */
@@ -546,25 +535,7 @@ window.MY_AUDIT = {
     let engineTimer = null;
     let engineLock = false;
     let observerTimer = null;
-    // 组件注册注册表，用来管理注入的面板，避免重复创建、事件冲突
-const injectedRegistry = [];
-function registerInjectedItem(el, type) {
-  injectedRegistry.push({ el, type });
-}
-function unregisterAllByType(type) {
-  const list = injectedRegistry.filter(item => item.type === type);
-  list.forEach(item => {
-    if(item.el && item.el.parentNode) item.el.remove();
-  });
-}
-let loadObserver = new MutationObserver((mutations) => {
-  const target = getDeskContainer();
-  if (target) {
-    loadObserver.disconnect();
-    init();
-  }
-});
-loadObserver.observe(document.body, { childList: true, subtree: true });
+    const injectedRegistry = [];
 
     /* ---------------- 图标 ---------------- */
     function getDeskContainer() {
@@ -635,25 +606,25 @@ loadObserver.observe(document.body, { childList: true, subtree: true });
         console.warn('[Audit] 角标更新失败', e);
       }
     }
-   function ensureAuditIcon() {
-  try {
-    registerAppIcon({
-      id: "audit",
-      name: "审核",
-      svg: DEFAULT_ICON_SVG,
-      onClick: function(ev) {
-        if (ev) ev.stopPropagation();
-        if (typeof window.openAuditPanel === 'function') window.openAuditPanel('pending');
+    function ensureAuditIcon() {
+      try {
+        const container = getDeskContainer();
+        let icon = document.querySelector('.app[data-app="audit"]');
+        if (!icon) {
+          if (!container) return;
+          icon = buildIconNode();
+          container.appendChild(icon);
+        }
+        icon.onclick = function (ev) {
+          if (ev) ev.stopPropagation();
+          if (typeof window.openAuditPanel === 'function') window.openAuditPanel('pending');
+        };
+        applyCustomIcon(icon);
+        updateBadge();
+      } catch (e) {
+        console.warn('[Audit] 图标重建失败', e);
       }
-    });
-    // 注册完图标之后，再应用自定义图标
-    const icon = document.querySelector('.app[data-app="audit"]');
-    if (icon) applyCustomIcon(icon);
-    updateBadge();
-  } catch (e) {
-    console.warn('[Audit] 图标注册失败', e);
-  }
-}
+    }
 
     /* ---------------- 悬浮球（修复问题4：移动端顺滑） ---------------- */
     function getBallPos() {
@@ -2625,7 +2596,7 @@ loadObserver.observe(document.body, { childList: true, subtree: true });
  * @param {string} cid 对话id
  * @returns {Object}
  */
-MY_AUDIT.getMergeCardPool = function(cid) {
+function getMergeCardPool(cid) {
   // 1.读取这个cid对应的原生字卡
   const storeKey = `xy-home-v2:${cid}`;
   const rawStr = localStorage.getItem(storeKey);
@@ -2649,7 +2620,9 @@ MY_AUDIT.getMergeCardPool = function(cid) {
     result[groupName] = [...result[groupName], ...auditGroups[groupName]];
   }
   return result;
-};
+}
+// 调试用，挂载全局，控制台可以测试
+window.getMergeCardPool = getMergeCardPool;
 
     /* ---------------- 初始化 ---------------- */
     function init() {
@@ -2688,7 +2661,7 @@ MY_AUDIT.getMergeCardPool = function(cid) {
     window.myAuditCardsToGroups = myAuditCardsToGroups;
     window.mergeMyAuditGroups = mergeMyAuditGroups;
     window.__MY_AUDIT_CARD_UI__ = { render: renderCardLibrary, refresh: refresh };
-      window.__MY_AUDIT_TOOL__ = {
+    window.MY_AUDIT = {
       raw: getMyAuditCardsRaw,
       toGroups: myAuditCardsToGroups,
       merge: mergeMyAuditGroups,
@@ -2697,13 +2670,35 @@ MY_AUDIT.getMergeCardPool = function(cid) {
         refresh();
       }
     };
-   if (document.readyState === "complete" || document.readyState === "interactive") {
-  init();
-} else {
-  document.addEventListener("DOMContentLoaded", init);
-}
-// 兜底保险，防止DOMContentLoaded漏触发
-setTimeout(init, 300);
+    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+      setTimeout(init, 1200);
+    } else {
+      window.addEventListener('DOMContentLoaded', function () { setTimeout(init, 1200); });
+    }
 
-    })(); // ✔️ 关闭模块二 Module2_CardLibraryTab
+    // -------- 放到模块二闭包内部，定义注入函数 --------
+    function injectAuditIcon() {
+      const grid = document.querySelector('.icon-grid');
+      if (!grid) {
+        setTimeout(injectAuditIcon, 250);
+        return;
+      }
+      if (grid.querySelector('[data-inject="audit"]')) return;
+      const sampleItem = grid.querySelector('.icon-item');
+      if (!sampleItem) return;
+      const item = document.createElement('div');
+      item.className = 'icon-item';
+      item.dataset.app = "audit";
+      item.dataset.inject = "audit";
+      item.innerHTML = `
+        <div class="icon-box">审</div>
+        <div class="icon-name">梦角审核</div>
+      `;
+      item.addEventListener('click', sampleItem.onclick);
+      grid.appendChild(item);
+    }
+    document.addEventListener('click', () => {
+      setTimeout(injectAuditIcon, 150);
+    });
+  })(); // ✔️ 关闭模块二 Module2_CardLibraryTab
 })(); // ✔️ 关闭整个脚本最外层自执行函数
