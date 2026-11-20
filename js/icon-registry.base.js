@@ -16,7 +16,7 @@ const injectedRegistry = new Set();
 function registerAppIcon(opts) {
     const { id, name, svg, onClick, badge = "" } = opts;
     if (injectedRegistry.has(id)) {
-        updateBadge(id, badge);
+        setIconBadge(id, badge);
         return;
     }
 
@@ -41,7 +41,7 @@ function registerAppIcon(opts) {
 
     container.appendChild(iconEl);
     injectedRegistry.add(id);
-    updateBadge(id, badge);
+      setIconBadge(id, badge);
 }
 
 /**
@@ -49,7 +49,7 @@ function registerAppIcon(opts) {
  * @param {string} id
  * @param {string} text
  */
-function updateBadge(id, text) {
+function setIconBadge(id, text) {
     const icon = document.querySelector('.app[data-app="' + id + '"]');
     if (!icon) return;
     let badge = icon.querySelector('.audit-badge');
