@@ -1,3 +1,17 @@
+(()=>{
+  const tpl = `
+<div class="page" id="page-audit" hidden>
+  <div class="page-head">
+    <h2>梦角审核</h2>
+  </div>
+  <div class="page-body">
+  </div>
+</div>
+`;
+  const div = document.createElement('div');
+  div.innerHTML = tpl;
+  document.body.append(...div.children);
+})();
 (function () {
 try {
 (function () {
