@@ -1307,10 +1307,28 @@
                 '<input type="checkbox" id="engine-enabled">' +
               '</div>' +
             '</div>' +
-            '<div class="settings-row">' +
-              '<span class="settings-label">说明</span>' +
-              '<span style="color:#9ca3af;">每30分钟巡检；主动申请概率2%；待审上限5条</span>' +
-            '</div>' +
+           '<div class="settings-row">' +
+  '<span class="settings-label">巡检周期(秒)</span>' +
+  '<div class="settings-controls">' +
+    '<input type="number" id="engine-interval" min="10" max="3600" value="' + Math.round(de.interval / 1000) + '" class="audit-input" style="width:80px;">' +
+  '</div>' +
+'</div>' +
+'<div class="settings-row">' +
+  '<span class="settings-label">主动申请概率(0~1)</span>' +
+  '<div class="settings-controls">' +
+    '<input type="number" step="0.01" min="0" max="1" id="engine-prob" value="' + de.baseProbability + '" class="audit-input" style="width:80px;">' +
+  '</div>' +
+'</div>' +
+'<div class="settings-row">' +
+  '<span class="settings-label">待审核上限条数</span>' +
+  '<div class="settings-controls">' +
+    '<input type="number" min="1" max="99" id="engine-max" value="' + de.maxPending + '" class="audit-input" style="width:80px;">' +
+  '</div>' +
+'</div>' +
+'<div class="settings-row">' +
+  '<span class="settings-label">说明</span>' +
+  '<span style="color:#9ca3af;">修改后自动保存生效</span>' +
+'</div>' +
           '</div>' +
           '<div class="settings-section">' +
             '<h4>数据备份</h4>' +
@@ -1436,6 +1454,23 @@
           window.__MY_AUDIT__.save();
           de.enabled ? startDreamEngine() : stopDreamEngine();
         };
+        const engineInterval = pane.querySelector('#engine-interval');
+        const engineProb = pane.querySelector('#engine-prob');
+        const engineMax = pane.querySelector('#engine-max');
+        engineInterval.oninput = function(){
+          de.interval = Number(engineInterval.value)*1000;
+          window.__MY_AUDIT__.save();
+          stopDreamEngine();
+          startDreamEngine();
+        }
+        engineProb.oninput = function(){
+          de.baseProbability = Number(engineProb.value);
+          window.__MY_AUDIT__.save();
+        }
+        engineMax.oninput = function(){
+          de.maxPending = Number(engineMax.value);
+          window.__MY_AUDIT__.save();
+        }
         // 备份
         pane.querySelector('#data-export').onclick = function () {
           try {
@@ -1958,7 +1993,7 @@
         createFloatingBall();
         initObserver();
         startDreamEngine();
-        setInterval(checkAndRepairChat, 30000);
+        setInterval(checkAndRepairChat, 5000);
 
         window.addEventListener('my-audit-data-updated', function () {
           updateBadge();
