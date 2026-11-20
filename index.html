@@ -13024,7 +13024,6 @@ font-size: 11.5px; color: var(--muted, #8a8a8a); cursor: pointer; touch-action: 
         </div>
       </div>
     </div>
-<div class="page" id="page-audit" hidden></div>
 
        <!-- 外观与主题（独立页面） -->
     <div class="page" id="page-theme" hidden>
@@ -15725,7 +15724,17 @@ font-size: 11.5px; color: var(--muted, #8a8a8a); cursor: pointer; touch-action: 
         </div>
       </div>
     </div>
-
+<div class="page" id="page-audit" hidden>
+  <div class="page-head">
+    <button id="audit-back">← 返回</button>
+    <h2>梦角审核</h2>
+  </div>
+  <div class="page-content">
+    <div id="audit-card-wrap" class="card-wrap">
+    </div>
+  </div>
+</div>
+       
     <!-- 写信页（独立全屏页） -->
     <div class="page" id="page-mail-write" hidden>
       <div class="chat-head">
@@ -22950,6 +22959,7 @@ window.__mochiBootRetry = function () { try { location.reload(); } catch (e) {} 
 <script defer src="js/arcade.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('arcade.js')"></script>
 <script defer src="js/mood-diary.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('mood-diary.js')"></script>
 <script defer src="js/sfx.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('sfx.js')"></script>
+<script defer src="js/page-audit.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('page-audit.js')"></script>
 <script defer src="js/fullscreen.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('fullscreen.js')"></script>
 <script defer src="js/data-backup.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('data-backup.js')"></script>
 <script defer src="js/feature-data.js" onerror="window.__mochiExtFail=(window.__mochiExtFail||[]).concat('feature-data.js')"></script>
