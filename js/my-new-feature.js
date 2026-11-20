@@ -2677,33 +2677,3 @@ window.getMergeCardPool = getMergeCardPool;
     }
   })();
 })();
-// 自动向【添加卡片弹窗】注入审核图标（修复点击无法添加，对齐原版DOM结构）
-(function() {
-    function injectAuditDeskIcon() {
-        const wrap = document.querySelector('.feat-wrap');
-        if (!wrap) return;
-        if (wrap.querySelector('[data-id="audit"]')) return;
-
-        const item = document.createElement('div');
-        item.className = 'feat-item';
-        item.dataset.id = 'audit';
-        item.innerHTML = `
-            <div class="fi-icon">审</div>
-            <div class="fi-name">审核</div>
-        `;
-        item.onclick = function () {
-            document.dispatchEvent(new CustomEvent("addApp", {
-                detail: { dataApp: "audit" }
-            }));
-        };
-        wrap.appendChild(item);
-    }
-
-    const libObserver = new MutationObserver(function () {
-        injectAuditDeskIcon();
-    });
-    libObserver.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-})();
