@@ -144,13 +144,12 @@ desc: '音效总开关与统一模式、开屏公告已读、引导完成标记�
 res: [/^sfx-/, /^notice-/, /^onboarding/, /^guide-/, /^splash-/, /^backup-/, /^last-export$/, /^install-/, /^theme-mode$/, /^accent-color$/, /^bg-keep/, /^bg-notify/, /^ver-update-notify$/] }
   ,
 {
-  id: 'audit',
-  name: '梦角审核',
-  group: '聊天与社交',
-  scope: 'both',
-  page: 'page-audit',
-  desc: '梦角双人审核字卡',
-  res: [/^audit-cards$/]
+  id: "audit",
+  name: "梦角审核",
+  icon: "📋",
+  route: "page-audit",
+  desc: "梦角卡片审核管理",
+  type: "page"
 }
 ];
 var FD_MOUNTS = {
