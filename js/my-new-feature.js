@@ -557,6 +557,14 @@ function unregisterAllByType(type) {
     if(item.el && item.el.parentNode) item.el.remove();
   });
 }
+let loadObserver = new MutationObserver((mutations) => {
+  const target = getDeskContainer();
+  if (target) {
+    loadObserver.disconnect();
+    init();
+  }
+});
+loadObserver.observe(document.body, { childList: true, subtree: true });
 
     /* ---------------- 图标 ---------------- */
     function getDeskContainer() {
@@ -2689,11 +2697,13 @@ MY_AUDIT.getMergeCardPool = function(cid) {
         refresh();
       }
     };
-    if (document.readyState === 'interactive' || document.readyState === 'complete') {
-      setTimeout(init, 1200);
-    } else {
-      window.addEventListener('DOMContentLoaded', function () { setTimeout(init, 1200); });
-    }
+   if (document.readyState === "complete" || document.readyState === "interactive") {
+  init();
+} else {
+  document.addEventListener("DOMContentLoaded", init);
+}
+// 兜底保险，防止DOMContentLoaded漏触发
+setTimeout(init, 300);
 
     })(); // ✔️ 关闭模块二 Module2_CardLibraryTab
 })(); // ✔️ 关闭整个脚本最外层自执行函数
