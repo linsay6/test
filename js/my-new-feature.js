@@ -2675,5 +2675,33 @@ window.getMergeCardPool = getMergeCardPool;
     } else {
       window.addEventListener('DOMContentLoaded', function () { setTimeout(init, 1200); });
     }
+    function injectAuditIcon() {
+  const grid = document.querySelector('.icon-grid');
+  if (!grid) {
+    setTimeout(injectAuditIcon, 250);
+    return;
+  }
+  if (grid.querySelector('[data-inject="audit"]')) return;
+
+  // 随便拿一个已有的原生图标作为模板，复制它的事件逻辑
+  const sampleItem = grid.querySelector('.icon-item');
+  if (!sampleItem) return;
+
+  const item = document.createElement('div');
+  item.className = 'icon-item';
+  item.dataset.app = "audit";
+  item.dataset.inject = "audit";
+  item.innerHTML = `
+    <div class="icon-box">审</div>
+    <div class="icon-name">梦角审核</div>
+  `;
+  // 关键：克隆原有图标上的点击行为
+  item.addEventListener('click', sampleItem.onclick);
+  grid.appendChild(item);
+}
+
+document.addEventListener('click', () => {
+  setTimeout(injectAuditIcon, 150);
+})
   })();
 })();
