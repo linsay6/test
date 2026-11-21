@@ -6,7 +6,7 @@
 // @author       You
 // @match        *://*/*
 // @grant        none
-// @run-at       document-end
+// @run-at       document-idle
 // ==/UserScript==
 (function () {
   'use strict';
@@ -276,11 +276,15 @@
   }
 
   const state = loadData();
+    let _saveDebounceTimer = null;
   window.__MY_AUDIT__ = {
     data: state,
     save: function () {
-      saveData(window.__MY_AUDIT__.data);
-      try { window.dispatchEvent(new CustomEvent('my-audit-data-updated')); } catch (e) {}
+      clearTimeout(_saveDebounceTimer);
+      _saveDebounceTimer = setTimeout(()=>{
+        saveData(window.__MY_AUDIT__.data);
+        try { window.dispatchEvent(new CustomEvent('my-audit-data-updated')); } catch (e) {}
+      },120);
     },
     reload: function () {
       window.__MY_AUDIT__.data = loadData();
@@ -2203,41 +2207,57 @@
         log('[Audit] 梦角引擎停止失败', e);
       }
     }
-
+        let globalObserver = null;
     function scheduleHeal() {
       if (observerTimer) return;
       observerTimer = setTimeout(function () {
         observerTimer = null;
         try {
-          ensureAuditIcon();
-          createFloatingBall();
+          // 已经存在就跳过，避免重复创建消耗性能
+          if (!document.querySelector('.app[data-app="audit"]')) {
+            ensureAuditIcon();
+          }
           const ball = document.getElementById('audit-floating-ball');
-          if (ball) paintBall(ball);
-          checkAndRepairChat();
-        } catch (e) {}
-      }, 400);
+          if (!ball) {
+            createFloatingBall();
+          } else {
+            paintBall(ball);
+          }
+          // 只有聊天body存在的时候才执行聊天修复，桌面首页直接跳过
+          if(document.getElementById('chat-body')){
+            checkAndRepairChat();
+          }
+        } catch (e) { log('[Audit] heal error',e); }
+      }, 600); // 增大防抖间隔
     }
     function initObserver() {
       try {
-        const ob = new MutationObserver(function () { scheduleHeal(); });
-        ob.observe(document.body, { childList: true, subtree: true });
+        if(globalObserver) return;
+        globalObserver = new MutationObserver(function () { scheduleHeal(); });
+        // 仅监听子节点增删，不要开启attributes、characterData，减少事件数量
+        globalObserver.observe(document.body, { childList: true, subtree: true });
       } catch (e) {
         log('[Audit] 自愈监听初始化失败', e);
       }
     }
-    function init() {
+
+     function init() {
       try {
         ensureAuditIcon();
         createFloatingBall();
         initObserver();
         startDreamEngine();
-        setInterval(checkAndRepairChat, 5000);
-
+        // 定时器：只有聊天页面存在chat‑body才执行修复，首页跳过
+        setInterval(()=>{
+          if(document.getElementById('chat-body')){
+            checkAndRepairChat();
+          }
+        }, 5000);
         window.addEventListener('my-audit-data-updated', function () {
           updateBadge();
         });
         window.addEventListener('storage', function (e) {
-          if (e.key === STORAGE_CHAT_KEY) {
+          if (e.key === STORAGE_CHAT_KEY && document.getElementById('chat-body')) {
             setTimeout(checkAndRepairChat, 300);
           }
         });
@@ -2887,14 +2907,19 @@
           }, 500);
         });
         ob.observe(document.body, { childList: true, subtree: true });
-        let tries = 0;
+     let tries = 0;
         const timer = setInterval(function () {
           tries++;
           try {
-            if (document.querySelector(TAB_SELECTOR) && !document.getElementById(PANE_ID)) ensurePane();
+            const tabEl = document.querySelector(TAB_SELECTOR);
+            if (tabEl) {
+              ensurePane();
+              clearInterval(timer); //找到tab立刻停止轮询，不再循环消耗CPU
+              return;
+            }
           } catch (e) {}
-          if (tries > 30) clearInterval(timer);
-        }, 2000);
+          if (tries > 15) clearInterval(timer); //减少最大尝试次数
+        }, 2200);
       } catch (e) {
         log('[Audit] 模块二初始化失败', e);
       }
