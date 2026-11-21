@@ -1826,7 +1826,7 @@ function saveInjectedMsgs() {
     console.warn("消息本地存储失败", e);
   }
 }
-     function injectBubbleToChat(text, side) {
+  function injectBubbleToChat(text, side) {
   var renderSuccess = false;
   try {
     var now = Date.now();
@@ -1862,6 +1862,8 @@ function saveInjectedMsgs() {
           }
         } catch(err) {}
       }
+    } catch (dataErr) {
+      // 补全外层try对应的catch，修复语法报错
     }
 
                 var LS_KEY = 'xy-home-v2:' + cid + ':chat-msgs';
@@ -1894,7 +1896,6 @@ function saveInjectedMsgs() {
                 INJECTED_MSGS.push(newMsg);
                 if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
               saveInjectedMsgs();
-            } catch (dataErr) {}
 
             var chatBody = document.getElementById('chat-body');
             if (!chatBody) return true;
