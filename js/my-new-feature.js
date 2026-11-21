@@ -1826,7 +1826,7 @@ function saveInjectedMsgs() {
     console.warn("消息本地存储失败", e);
   }
 }
-    function injectBubbleToChat(text, side) {
+     function injectBubbleToChat(text, side) {
   var renderSuccess = false;
   try {
     var now = Date.now();
@@ -1898,13 +1898,10 @@ function saveInjectedMsgs() {
 
             var chatBody = document.getElementById('chat-body');
             if (!chatBody) return true;
-
-            if (typeof window.renderWindow === 'function') {
-                try {
-                    window.renderWindow(false, false, true);
-                    if (typeof window.scrollToBottom === 'function') window.scrollToBottom();
-                    return true;
-                } catch (e) {}
+            // 已移除 window.renderWindow 全量重绘接口，该接口会清空聊天DOM，造成消息丢失、头像全部变为蓝色默认头像
+            // 仅保留页面滚动到底部，只做appendChild追加单条气泡，不销毁原有聊天内容
+            if (typeof window.scrollToBottom === 'function') {
+                try { window.scrollToBottom(); } catch(e){}
             }
 
             try {
