@@ -85,7 +85,8 @@
         notifyEnabled: true,
         notifyRejected: false,
         debugMode: true,
-        mengjiaoName: '梦角'
+        mengjiaoName: '梦角',
+        toastBgColor: '#3b82f6'
       }
     };
   }
@@ -172,7 +173,8 @@
           notifyEnabled: parsed.settings && typeof parsed.settings.notifyEnabled === 'boolean' ? parsed.settings.notifyEnabled : base.settings.notifyEnabled,
           notifyRejected: parsed.settings && typeof parsed.settings.notifyRejected === 'boolean' ? parsed.settings.notifyRejected : base.settings.notifyRejected,
           debugMode: parsed.settings && typeof parsed.settings.debugMode === 'boolean' ? parsed.settings.debugMode : base.settings.debugMode,
-          mengjiaoName: (parsed.settings && parsed.settings.mengjiaoName) || base.settings.mengjiaoName
+          mengjiaoName: (parsed.settings && parsed.settings.mengjiaoName) || base.settings.mengjiaoName,
+          toastBgColor: (parsed.settings && parsed.settings.toastBgColor) || base.settings.toastBgColor
         }
       };
       merged.categories.forEach((c, i) => {
@@ -218,19 +220,20 @@
       log('[Audit] CSS注入失败', e);
     }
   }
-  function toast(msg, color) {
+   function toast(msg, color) {
     try {
       let box = document.getElementById('audit-toast');
       if (!box) {
         box = document.createElement('div');
         box.id = 'audit-toast';
         box.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);' +
-          'padding:8px 14px;border-radius:8px;background:rgba(17,24,39,.9);color:#fff;' +
+          'padding:8px 14px;border-radius:8px;color:#fff;' +
           'font-size:13px;z-index:100002;pointer-events:none;opacity:0;transition:opacity .2s;';
         document.body.appendChild(box);
       }
       box.textContent = msg;
-      box.style.background = color || 'rgba(17,24,39,.9)';
+      const cfgBg = window.__MY_AUDIT__?.data?.settings?.toastBgColor;
+      box.style.background = color || cfgBg || 'rgba(17,24,39,.9)';
       box.style.opacity = '1';
       clearTimeout(box._timer);
       box._timer = setTimeout(() => { box.style.opacity = '0'; }, 2200);
@@ -1054,9 +1057,10 @@
         list.forEach(function (item, idx) {
           const label = ACTION_LABEL[item.action] || item.action;
           let senderName = item.sender;
-          // 兼容老数据：如果发件人是'梦角'且配置改了名字，则动态展示新名字
-          if (senderName === '梦角' && currentMjName !== '梦角') {
-            senderName = currentMjName;
+          // UI层动态映射：存储sender保存"梦角"，页面展示读取设置内的最新昵称，不改动存储数据
+          const cfgMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+          if(senderName === '梦角'){
+            senderName = cfgMjName;
           }
           
           let desc = '';
@@ -1328,10 +1332,11 @@
             filtered.forEach(function (h) {
               const label = ACTION_LABEL[h.action] || h.action;
               let senderName = h.sender;
-              const currentMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
-              if (senderName === '梦角' && currentMjName !== '梦角') {
-                senderName = currentMjName;
+              const cfgMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+              if(senderName === '梦角'){
+                senderName = cfgMjName;
               }
+
               hHtml += '<div class="audit-history-item">' +
                 '<div>' +
                   '<div><b>' + label + '</b> · ' + escapeHTML(h.targetText || '') + '</div>' +
@@ -1472,10 +1477,17 @@
               '<div class="settings-controls"><input type="checkbox" id="notify-enabled"></div>' +
             '</div>' +
             '<div class="settings-row">' +
+              '<span class="settings-label">页面toast提示背景色</span>' +
+              '<div class="settings-controls">' +
+                '<input type="color" id="toast-bg-color">' +
+                '<button class="audit-btn audit-btn-sm" id="toast-bg-reset">恢复默认</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-row">' +
               '<span class="settings-label">调试日志</span>' +
               '<div class="settings-controls"><input type="checkbox" id="debug-mode"></div>' +
             '</div>' +
-          '</div>' +
+          '</div>'
           '<div class="settings-section">' +
             '<h4>数据备份</h4>' +
             '<div class="settings-row">' +
@@ -1647,6 +1659,18 @@
         dMode.onchange = function() {
           s.debugMode = dMode.checked;
           window.__MY_AUDIT__.save();
+        };
+        // toast背景色
+        const toastColorInput = pane.querySelector('#toast-bg-color');
+        toastColorInput.value = s.toastBgColor || '#3b82f6';
+        toastColorInput.oninput = function(){
+          s.toastBgColor = toastColorInput.value;
+          window.__MY_AUDIT__.save();
+        };
+        pane.querySelector('#toast-bg-reset').onclick = function(){
+          s.toastBgColor = '#3b82f6';
+          window.__MY_AUDIT__.save();
+          renderSettings();
         };
 
         pane.querySelector('#data-export').onclick = function () {
