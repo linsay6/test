@@ -6,7 +6,7 @@
 // @author       You
 // @match        *://*/*
 // @grant        none
-// @run-at       document-idle
+// @run-at       document-end
 // ==/UserScript==
 (function () {
   'use strict';
@@ -14,6 +14,10 @@
      0. 全局基础层：常量 / 存储 / 工具 / 全局样式
      ============================================================ */
   const STORAGE_CHAT_KEY = 'xy-home-v2:default:chat-msgs';
+  //脚本气泡本地持久存储key，实现页面刷新气泡不消失
+const STORAGE_BUBBLE_KEY = "my‑audit‑bubble‑list";
+//最大保存气泡数量，防止localStorage爆容量
+const MAX_SAVE_BUBBLE = 30;
   const STORAGE_AUDIT_KEY = 'my-audit-cards';
   const DEFAULT_ICON_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
@@ -52,8 +56,41 @@
       }
     } catch(e) {}
   }
-  
-    function defaultData() {
+  // ============== 新增：梦角头像获取工具函数 ==============
+/**
+ * 获取原站存储的梦角(TA)头像，优先localStorage，DOM降级；彻底跳过#chat‑body聊天容器，杜绝窜头像bug
+ * 注意：已渲染完成的气泡DOM不会热更新头像；仅新消息、页面刷新生效
+ * @returns {string|null} 头像base64 src，获取失败返回null
+ */
+/**
+ * 获取原站存储的梦角(TA)头像，优先localStorage，DOM降级；彻底跳过#chat‑body聊天容器，杜绝窜头像bug
+ * ⚠️重要：禁止全局缓存返回值！每渲染气泡/悬浮球，现场调用此函数
+ * @returns {string|null} 头像base64 src；获取失败返回null
+ */
+function getOriginDreamAvatarSrc() {
+  const STORAGE_PARTNER_AVATAR_KEY = "xy-home-v2:default:cs-avatar-partner";
+  let storedAvatar = null;
+    try {
+    storedAvatar = localStorage.getItem(STORAGE_PARTNER_AVATAR_KEY);
+  } catch (err) {
+    log("[getOriginDreamAvatarSrc]读取头像异常", err);
+    return null;
+  }
+  //严格校验base64头像格式
+  if (storedAvatar && typeof storedAvatar === "string" && storedAvatar.startsWith("data:image/")) {
+    return storedAvatar;
+  }
+  //DOM降级兜底，严格排除#chat‑body聊天框，避免抓到用户头像
+  const chatBodyDom = document.querySelector("#chat-body");
+  let candidateList = Array.from(document.querySelectorAll("img"));
+  if (chatBodyDom) {
+    candidateList = candidateList.filter(img => !chatBodyDom.contains(img));
+  }
+  const partnerImg = candidateList.find(img => img?.src && img.src.startsWith("data:image/"));
+  return partnerImg?.src || null;
+}
+// ========================================================
+  function defaultData() {
     return {
       categories: [
         { id: 'cat-biaodian', name: '标点', disabled: false, collapsed: false, order: 1, cards: [] },
@@ -62,7 +99,6 @@
       ],
       pending: [],
       history: [],
-      injectedChatMsgs:[], //持久化脚本发送消息【新增】
       settings: {
         iconCustom: null,
         floatingBall: {
@@ -87,9 +123,7 @@
         notifyRejected: false,
         debugMode: true,
         mengjiaoName: '梦角',
-        // toast弹窗自定义配色【新增】
-        toastBgColor:'rgba(59, 130, 246,.9)',
-        toastTextColor:'#ffffff'
+        toastBgColor: '#3b82f6'
       }
     };
   }
@@ -166,22 +200,20 @@
       parsed = migrateLegacy(parsed) || {};
       const base = defaultData();
       const merged = {
-          categories: Array.isArray(parsed.categories) && parsed.categories.length ? parsed.categories : base.categories,
-          pending: Array.isArray(parsed.pending) ? parsed.pending.map(normalizePending) : [],
-          history: Array.isArray(parsed.history) ? parsed.history.slice(-100) : [],
-          injectedChatMsgs: Array.isArray(parsed.injectedChatMsgs) ? parsed.injectedChatMsgs.slice(-100) : [],
-          settings: {
-            iconCustom: parsed.settings && parsed.settings.iconCustom ? parsed.settings.iconCustom : null,
-            floatingBall: Object.assign({}, base.settings.floatingBall, (parsed.settings || {}).floatingBall || {}),
-            dreamEngine: Object.assign({}, base.settings.dreamEngine, (parsed.settings || {}).dreamEngine || {}),
-            notifyEnabled: parsed.settings && typeof parsed.settings.notifyEnabled === 'boolean' ? parsed.settings.notifyEnabled : base.settings.notifyEnabled,
-            notifyRejected: parsed.settings && typeof parsed.settings.notifyRejected === 'boolean' ? parsed.settings.notifyRejected : base.settings.notifyRejected,
-            debugMode: parsed.settings && typeof parsed.settings.debugMode === 'boolean' ? parsed.settings.debugMode : base.settings.debugMode,
-            mengjiaoName: (parsed.settings && parsed.settings.mengjiaoName) || base.settings.mengjiaoName,
-            toastBgColor: (parsed.settings && parsed.settings.toastBgColor) || base.settings.toastBgColor,
-            toastTextColor: (parsed.settings && parsed.settings.toastTextColor) || base.settings.toastTextColor
-          }
-        };
+        categories: Array.isArray(parsed.categories) && parsed.categories.length ? parsed.categories : base.categories,
+        pending: Array.isArray(parsed.pending) ? parsed.pending.map(normalizePending) : [],
+        history: Array.isArray(parsed.history) ? parsed.history.slice(-100) : [],
+        settings: {
+          iconCustom: parsed.settings && parsed.settings.iconCustom ? parsed.settings.iconCustom : null,
+          floatingBall: Object.assign({}, base.settings.floatingBall, (parsed.settings || {}).floatingBall || {}),
+          dreamEngine: Object.assign({}, base.settings.dreamEngine, (parsed.settings || {}).dreamEngine || {}),
+          notifyEnabled: parsed.settings && typeof parsed.settings.notifyEnabled === 'boolean' ? parsed.settings.notifyEnabled : base.settings.notifyEnabled,
+          notifyRejected: parsed.settings && typeof parsed.settings.notifyRejected === 'boolean' ? parsed.settings.notifyRejected : base.settings.notifyRejected,
+          debugMode: parsed.settings && typeof parsed.settings.debugMode === 'boolean' ? parsed.settings.debugMode : base.settings.debugMode,
+          mengjiaoName: (parsed.settings && parsed.settings.mengjiaoName) || base.settings.mengjiaoName,
+          toastBgColor: (parsed.settings && parsed.settings.toastBgColor) || base.settings.toastBgColor
+        }
+      };
       merged.categories.forEach((c, i) => {
         c.id = c.id || genId();
         c.name = c.name || ('分类' + (i + 1));
@@ -189,7 +221,7 @@
         c.collapsed = !!c.collapsed;
         c.order = typeof c.order === 'number' ? c.order : i;
         c.cards = Array.isArray(c.cards) ? c.cards : [];
-          c.cards.forEach(card => {
+        c.cards.forEach(card => {
           card.id = card.id || genId();
           card.text = card.text || '';
           card.disabled = !!card.disabled;
@@ -213,6 +245,46 @@
       return false;
     }
   }
+  /**
+ * 保存气泡列表到localStorage实现刷新不丢失
+ * @param {Array} bubbleArr 气泡对象数组 {id,text,timestamp}
+ */
+function saveBubbleList(bubbleArr) {
+  try {
+    //裁剪最大条数，避免base64头像撑爆存储
+    const list = bubbleArr.slice(-MAX_SAVE_BUBBLE);
+    localStorage.setItem(STORAGE_BUBBLE_KEY, JSON.stringify(list));
+  } catch (e) {
+    log("[Audit]气泡持久化存储失败", e);
+  }
+}
+
+/**
+ * 读取持久化气泡列表
+ * @returns {Array}
+ */
+function loadBubbleList() {
+  try {
+    const raw = localStorage.getItem(STORAGE_BUBBLE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    log("[Audit]读取持久气泡失败", e);
+    return [];
+  }
+}
+
+/**
+ * 单条气泡加入持久化列表
+ * @param {Object} bubbleItem
+ * @param {Array} currentList
+ * @returns {Array}新数组
+ */
+function pushBubbleItem(bubbleItem, currentList) {
+  const next = [...currentList, bubbleItem];
+  saveBubbleList(next);
+  return next;
+}
   function injectCSS(css, id) {
     try {
       const styleId = id || 'my-audit-global-css';
@@ -227,22 +299,20 @@
   }
   function toast(msg, color) {
     try {
-      const s = window.__MY_AUDIT__.data.settings;
       let box = document.getElementById('audit-toast');
       if (!box) {
         box = document.createElement('div');
         box.id = 'audit-toast';
         box.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);' +
-          'padding:8px 14px;border-radius:8px;font-size:13px;z-index:100002;pointer-events:none;opacity:0;transition:opacity .2s;';
+          'padding:8px 14px;border-radius:8px;color:#fff;' +
+          'font-size:13px;z-index:100002;pointer-events:none;opacity:0;transition:opacity .2s;';
         document.body.appendChild(box);
       }
       box.textContent = msg;
-      if(color){
-        box.style.background = color;
-      }else{
-        box.style.background = s.toastBgColor;
-      }
-      box.style.color = s.toastTextColor;
+      // 修复BUG：每次调用toast强制读取最新配置，无论盒子是否已经存在
+      const cfgBg = window.__MY_AUDIT__?.data?.settings?.toastBgColor;
+      const finalBg = color || cfgBg || 'rgba(17,24,39,.9)';
+      box.style.background = finalBg;
       box.style.opacity = '1';
       clearTimeout(box._timer);
       box._timer = setTimeout(() => { box.style.opacity = '0'; }, 2200);
@@ -276,15 +346,11 @@
   }
 
   const state = loadData();
-    let _saveDebounceTimer = null;
   window.__MY_AUDIT__ = {
     data: state,
     save: function () {
-      clearTimeout(_saveDebounceTimer);
-      _saveDebounceTimer = setTimeout(()=>{
-        saveData(window.__MY_AUDIT__.data);
-        try { window.dispatchEvent(new CustomEvent('my-audit-data-updated')); } catch (e) {}
-      },120);
+      saveData(window.__MY_AUDIT__.data);
+      try { window.dispatchEvent(new CustomEvent('my-audit-data-updated')); } catch (e) {}
     },
     reload: function () {
       window.__MY_AUDIT__.data = loadData();
@@ -720,8 +786,11 @@
         }
         inner.style.background = s.color || '#3b82f6';
         inner.style.fontSize = Math.max(14, Math.floor((s.size || 56) * 0.4)) + 'px';
-        if (s.avatar) {
-          inner.innerHTML = '<img src="' + s.avatar + '" alt="">';
+        //悬浮球优先读取原网页梦角头像，脚本设置头像作为降级兜底
+        const originDreamAvatar = getOriginDreamAvatarSrc();
+        const finalBallAvatar = originDreamAvatar || s.avatar;
+        if (finalBallAvatar) {
+          inner.innerHTML = '<img src="' + finalBallAvatar + '" alt="">';
         } else {
           inner.innerHTML = '✍';
         }
@@ -786,7 +855,7 @@
               if (e.cancelable) e.preventDefault();
             } catch (err) {}
           };
-           const onUp = function () {
+         const onUp = function () {
             if (!dragging) return;
             dragging = false;
             ball.style.transition = 'transform .2s ease';
@@ -1070,9 +1139,10 @@
         list.forEach(function (item, idx) {
           const label = ACTION_LABEL[item.action] || item.action;
           let senderName = item.sender;
-          // 兼容老数据：如果发件人是'梦角'且配置改了名字，则动态展示新名字
-          if (senderName === '梦角' && currentMjName !== '梦角') {
-            senderName = currentMjName;
+          // UI层动态映射：存储sender保存"梦角"，页面展示读取设置内的最新昵称，不改动存储数据
+          const cfgMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+          if(senderName === '梦角'){
+            senderName = cfgMjName;
           }
           
           let desc = '';
@@ -1218,13 +1288,13 @@
           const hit = findCard(item);
           if (!hit) { toast('未找到对应字卡，可能已被删除', '#b45309'); return false; }
           hit.cat.cards = hit.cat.cards.filter(function (c) { return c.id !== hit.card.id; });
-         } else if (item.action === 'disable') {
+        } else if (item.action === 'disable') {
           const hit = findCard(item);
           if (!hit) { toast('未找到对应字卡', '#b45309'); return false; }
           hit.card.disabled = true;
           hit.card.disabledType = item.disabledType === 'both' ? 'both' : 'single';
           hit.card.disabledBy = item.sender || '';
-          } else if (item.action === 'restore') {
+        } else if (item.action === 'restore') {
           const hit = findCard(item);
           if (!hit) { toast('未找到对应字卡', '#b45309'); return false; }
           hit.card.disabled = false;
@@ -1344,10 +1414,11 @@
             filtered.forEach(function (h) {
               const label = ACTION_LABEL[h.action] || h.action;
               let senderName = h.sender;
-              const currentMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
-              if (senderName === '梦角' && currentMjName !== '梦角') {
-                senderName = currentMjName;
+              const cfgMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+              if(senderName === '梦角'){
+                senderName = cfgMjName;
               }
+
               hHtml += '<div class="audit-history-item">' +
                 '<div>' +
                   '<div><b>' + label + '</b> · ' + escapeHTML(h.targetText || '') + '</div>' +
@@ -1481,31 +1552,24 @@
               '<div class="settings-controls"><input type="number" min="1" max="99" id="engine-max" class="audit-input" style="width:80px;"></div>' +
             '</div>' +
           '</div>' +
-         '<div class="settings-section">' +
+          '<div class="settings-section">' +
             '<h4>其他设置</h4>' +
             '<div class="settings-row">' +
               '<span class="settings-label">系统通知</span>' +
               '<div class="settings-controls"><input type="checkbox" id="notify-enabled"></div>' +
             '</div>' +
             '<div class="settings-row">' +
+              '<span class="settings-label">页面toast提示背景色</span>' +
+              '<div class="settings-controls">' +
+                '<input type="color" id="toast-bg-color">' +
+                '<button class="audit-btn audit-btn-sm" id="toast-bg-reset">恢复默认</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-row">' +
               '<span class="settings-label">调试日志</span>' +
               '<div class="settings-controls"><input type="checkbox" id="debug-mode"></div>' +
             '</div>' +
-            '<div class="settings-row">' +
-              '<span class="settings-label">页面toast背景色</span>' +
-              '<div class="settings-controls">' +
-                '<input type="color" id="toast-bg-color">' +
-                '<button class="audit-btn audit-btn-sm" id="toast-bg-reset">重置</button>' +
-              '</div>' +
-            '</div>' +
-            '<div class="settings-row">' +
-              '<span class="settings-label">页面toast文字颜色</span>' +
-              '<div class="settings-controls">' +
-                '<input type="color" id="toast-text-color">' +
-                '<button class="audit-btn audit-btn-sm" id="toast-text-reset">重置</button>' +
-              '</div>' +
-            '</div>' +
-          '</div>';
+          '</div>'
           '<div class="settings-section">' +
             '<h4>数据备份</h4>' +
             '<div class="settings-row">' +
@@ -1678,26 +1742,15 @@
           s.debugMode = dMode.checked;
           window.__MY_AUDIT__.save();
         };
-        //===== toast配色设置事件【新增】=====
-        const toastBgInput = pane.querySelector('#toast-bg-color');
-        const toastTextInput = pane.querySelector('#toast-text-color');
-        toastBgInput.value = s.toastBgColor;
-        toastTextInput.value = s.toastTextColor;
-        toastBgInput.oninput = function(){
-          s.toastBgColor = toastBgInput.value;
+        // toast背景色
+        const toastColorInput = pane.querySelector('#toast-bg-color');
+        toastColorInput.value = s.toastBgColor || '#3b82f6';
+        toastColorInput.oninput = function(){
+          s.toastBgColor = toastColorInput.value;
           window.__MY_AUDIT__.save();
         };
         pane.querySelector('#toast-bg-reset').onclick = function(){
-          s.toastBgColor = 'rgba(59, 130, 246,.9)';
-          window.__MY_AUDIT__.save();
-          renderSettings();
-        };
-        toastTextInput.oninput = function(){
-          s.toastTextColor = toastTextInput.value;
-          window.__MY_AUDIT__.save();
-        };
-        pane.querySelector('#toast-text-reset').onclick = function(){
-          s.toastTextColor = '#ffffff';
+          s.toastBgColor = '#3b82f6';
           window.__MY_AUDIT__.save();
           renderSettings();
         };
@@ -1756,38 +1809,62 @@
     }
 
     /* ---------------- 消息发送 ---------------- */
-    const INJECTED_MSGS = [];
-    function injectBubbleToChat(text, side) {
-        var renderSuccess = false;
+    const INJECTED_STORAGE_KEY = "mochi_injected_msg_list";
+let INJECTED_MSGS = [];
+// 从本地存储读取
+try {
+  const raw = localStorage.getItem(INJECTED_STORAGE_KEY);
+  if (raw) INJECTED_MSGS = JSON.parse(raw);
+} catch (e) {
+  INJECTED_MSGS = [];
+}
+
+function saveInjectedMsgs() {
+  try {
+    localStorage.setItem(INJECTED_STORAGE_KEY, JSON.stringify(INJECTED_MSGS));
+  } catch (e) {
+    console.warn("消息本地存储失败", e);
+  }
+}
+  function injectBubbleToChat(text, side) {
+  var renderSuccess = false;
+  try {
+    var now = Date.now();
+    var useSide = side === 'out' ? 'out' : 'in';
+    // 给梦角消息打上标记，区分角色，方便渲染时加载正确头像
+    var newMsg = {
+      side: useSide,
+      text: text,
+      time: now,
+      isPartnerMsg: useSide === 'in'
+    };
+    try {
+      var cid = 'default';
+      var store = null;
+      try {
+        if (window.storeFor) store = window.storeFor(cid);
+        else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
+      } catch(e) {}
+
+      var storeData = null;
+      if (store && typeof store.get === 'function') {
         try {
-            var now = Date.now();
-            var useSide = side === 'out' ? 'out' : 'in';
-            var newMsg = { side: useSide, text: text, time: now };
-
-            try {
-                var cid = 'default';
-                var store = null;
-                try {
-                    if (window.storeFor) store = window.storeFor(cid);
-                    else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
-                } catch(e) {}
-
-                var storeData = null;
-                if (store && typeof store.get === 'function') {
-                    try {
-                        storeData = store.get('chat-msgs');
-                        var targetArr = null;
-                        if (Array.isArray(storeData)) targetArr = storeData;
-                        else if (storeData && typeof storeData === 'object') {
-                            for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
-                        }
-                        if (targetArr) {
-                            targetArr.push(newMsg);
-                            if (typeof store.set === 'function') store.set('chat-msgs', storeData);
-                            else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
-                        }
-                    } catch(err) {}
-                }
+          storeData = store.get('chat-msgs');
+          var targetArr = null;
+          if (Array.isArray(storeData)) targetArr = storeData;
+          else if (storeData && typeof storeData === 'object') {
+            for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
+          }
+          if (targetArr) {
+            targetArr.push(newMsg);
+            if (typeof store.set === 'function') store.set('chat-msgs', storeData);
+            else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
+          }
+        } catch(err) {}
+      }
+    } catch (dataErr) {
+      // 补全外层try对应的catch，修复语法报错
+    }
 
                 var LS_KEY = 'xy-home-v2:' + cid + ':chat-msgs';
                 try {
@@ -1818,23 +1895,14 @@
 
                 INJECTED_MSGS.push(newMsg);
                 if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
-              //持久化保存，刷新不会丢【新增】
-                window.__MY_AUDIT__.data.injectedChatMsgs.push(newMsg);
-                if(window.__MY_AUDIT__.data.injectedChatMsgs.length>100){
-                  window.__MY_AUDIT__.data.injectedChatMsgs.shift();
-                }
-                window.__MY_AUDIT__.save();
-            } catch (dataErr) {}
+              saveInjectedMsgs();
 
             var chatBody = document.getElementById('chat-body');
             if (!chatBody) return true;
-
-            if (typeof window.renderWindow === 'function') {
-                try {
-                    window.renderWindow(false, false, true);
-                    if (typeof window.scrollToBottom === 'function') window.scrollToBottom();
-                    return true;
-                } catch (e) {}
+            // 已移除 window.renderWindow 全量重绘接口，该接口会清空聊天DOM，造成消息丢失、头像全部变为蓝色默认头像
+            // 仅保留页面滚动到底部，只做appendChild追加单条气泡，不销毁原有聊天内容
+            if (typeof window.scrollToBottom === 'function') {
+                try { window.scrollToBottom(); } catch(e){}
             }
 
             try {
@@ -1877,12 +1945,16 @@
                     if (colorVar && colorVar.trim()) bubbleStyle.color = colorVar.trim();
                 }
 
-                var avatarRadius = '4px';
+                                var avatarRadius = '4px';
+                // 不再从chat‑body内部抓取图片，改用我们封装的getOriginDreamAvatarSrc()读取原站localStorage梦角头像
+                // 只从sampleAvatar提取圆角样式，不再clone整个img节点！
                 var sampleAvatar = chatBody.querySelector('img');
                 if (sampleAvatar) {
                     var sa = window.getComputedStyle(sampleAvatar);
                     if (sa.borderRadius) avatarRadius = sa.borderRadius;
                 }
+                // ⭐【重点】每次渲染气泡现场读取梦角头像，禁止全局缓存！
+                const dreamAvatarSrc = getOriginDreamAvatarSrc();
 
                 var wrapper = document.createElement('div');
                 wrapper.setAttribute('data-ma-injected', '1');
@@ -1892,10 +1964,13 @@
                 leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 10px; flex-shrink: 0; width: 40px;';
 
                 var avatarEl;
-                if (sampleAvatar) {
-                    avatarEl = sampleAvatar.cloneNode();
+                if (dreamAvatarSrc) {
+                    // 拿到有效base64头像 → 创建全新img，不clone聊天框内任何图片
+                    avatarEl = document.createElement('img');
+                    avatarEl.src = dreamAvatarSrc;
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; object-fit: cover;';
                 } else {
+                    // 获取头像失败，使用灰色占位div
                     avatarEl = document.createElement('div');
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; background: #ddd;';
                 }
@@ -1923,13 +1998,9 @@
         } catch (globalErr) {}
         return renderSuccess;
     }
-        function checkAndRepairChat() {
+
+    function checkAndRepairChat() {
         var chatBody = document.getElementById('chat-body');
-        //页面刷新：把持久化存储的消息加载进内存数组【新增】
-        if(window.__MY_AUDIT__ && Array.isArray(window.__MY_AUDIT__.data.injectedChatMsgs)){
-          INJECTED_MSGS.length=0;
-          INJECTED_MSGS.push(...window.__MY_AUDIT__.data.injectedChatMsgs);
-        }
         if (!chatBody || INJECTED_MSGS.length === 0) return;
 
         var bubbleStyle = {
@@ -1974,9 +2045,12 @@
                 wrapper.setAttribute('data-ma-injected', '1');
                 wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 14px; padding: 0 10px; width: 100%; box-sizing: border-box;';
 
+                //自愈重建气泡：现场读取梦角头像，禁止全局缓存
+                const dreamAvatarSrc = getOriginDreamAvatarSrc();
                 var avatarEl;
-                if (sampleAvatar) {
-                    avatarEl = sampleAvatar.cloneNode();
+                if (dreamAvatarSrc) {
+                    avatarEl = document.createElement('img');
+                    avatarEl.src = dreamAvatarSrc;
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; object-fit: cover;';
                 } else {
                     avatarEl = document.createElement('div');
@@ -2207,57 +2281,41 @@
         log('[Audit] 梦角引擎停止失败', e);
       }
     }
-        let globalObserver = null;
+
     function scheduleHeal() {
       if (observerTimer) return;
       observerTimer = setTimeout(function () {
         observerTimer = null;
         try {
-          // 已经存在就跳过，避免重复创建消耗性能
-          if (!document.querySelector('.app[data-app="audit"]')) {
-            ensureAuditIcon();
-          }
+          ensureAuditIcon();
+          createFloatingBall();
           const ball = document.getElementById('audit-floating-ball');
-          if (!ball) {
-            createFloatingBall();
-          } else {
-            paintBall(ball);
-          }
-          // 只有聊天body存在的时候才执行聊天修复，桌面首页直接跳过
-          if(document.getElementById('chat-body')){
-            checkAndRepairChat();
-          }
-        } catch (e) { log('[Audit] heal error',e); }
-      }, 600); // 增大防抖间隔
+          if (ball) paintBall(ball);
+          checkAndRepairChat();
+        } catch (e) {}
+      }, 400);
     }
     function initObserver() {
       try {
-        if(globalObserver) return;
-        globalObserver = new MutationObserver(function () { scheduleHeal(); });
-        // 仅监听子节点增删，不要开启attributes、characterData，减少事件数量
-        globalObserver.observe(document.body, { childList: true, subtree: true });
+        const ob = new MutationObserver(function () { scheduleHeal(); });
+        ob.observe(document.body, { childList: true, subtree: true });
       } catch (e) {
         log('[Audit] 自愈监听初始化失败', e);
       }
     }
-
-     function init() {
+    function init() {
       try {
         ensureAuditIcon();
         createFloatingBall();
         initObserver();
         startDreamEngine();
-        // 定时器：只有聊天页面存在chat‑body才执行修复，首页跳过
-        setInterval(()=>{
-          if(document.getElementById('chat-body')){
-            checkAndRepairChat();
-          }
-        }, 5000);
+        setInterval(checkAndRepairChat, 5000);
+
         window.addEventListener('my-audit-data-updated', function () {
           updateBadge();
         });
         window.addEventListener('storage', function (e) {
-          if (e.key === STORAGE_CHAT_KEY && document.getElementById('chat-body')) {
+          if (e.key === STORAGE_CHAT_KEY) {
             setTimeout(checkAndRepairChat, 300);
           }
         });
@@ -2429,7 +2487,7 @@
           html += '<div class="cc-card' + (card.disabled ? ' cc-card-disabled' : '') + '" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">';
           html += '<input type="checkbox" class="cc-check cc-card-check" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">';
           html += '<span class="cc-card-text' + (card.disabled ? ' disabled' : '') + '">' + escapeHTML(card.text) + '</span>';
-          if (card.disabled) {
+        if (card.disabled) {
             let badgeText = '';
             const mjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
             if(card.disabledBy && card.disabledBy.length>0){
@@ -2907,19 +2965,14 @@
           }, 500);
         });
         ob.observe(document.body, { childList: true, subtree: true });
-     let tries = 0;
+        let tries = 0;
         const timer = setInterval(function () {
           tries++;
           try {
-            const tabEl = document.querySelector(TAB_SELECTOR);
-            if (tabEl) {
-              ensurePane();
-              clearInterval(timer); //找到tab立刻停止轮询，不再循环消耗CPU
-              return;
-            }
+            if (document.querySelector(TAB_SELECTOR) && !document.getElementById(PANE_ID)) ensurePane();
           } catch (e) {}
-          if (tries > 15) clearInterval(timer); //减少最大尝试次数
-        }, 2200);
+          if (tries > 30) clearInterval(timer);
+        }, 2000);
       } catch (e) {
         log('[Audit] 模块二初始化失败', e);
       }
