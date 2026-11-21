@@ -14,6 +14,10 @@
      0. 全局基础层：常量 / 存储 / 工具 / 全局样式
      ============================================================ */
   const STORAGE_CHAT_KEY = 'xy-home-v2:default:chat-msgs';
+  //脚本气泡本地持久存储key，实现页面刷新气泡不消失
+const STORAGE_BUBBLE_KEY = "my‑audit‑bubble‑list";
+//最大保存气泡数量，防止localStorage爆容量
+const MAX_SAVE_BUBBLE = 30;
   const STORAGE_AUDIT_KEY = 'my-audit-cards';
   const DEFAULT_ICON_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
@@ -58,27 +62,32 @@
  * 注意：已渲染完成的气泡DOM不会热更新头像；仅新消息、页面刷新生效
  * @returns {string|null} 头像base64 src，获取失败返回null
  */
+/**
+ * 获取原站存储的梦角(TA)头像，优先localStorage，DOM降级；彻底跳过#chat‑body聊天容器，杜绝窜头像bug
+ * ⚠️重要：禁止全局缓存返回值！每渲染气泡/悬浮球，现场调用此函数
+ * @returns {string|null} 头像base64 src；获取失败返回null
+ */
 function getOriginDreamAvatarSrc() {
   const STORAGE_PARTNER_AVATAR_KEY = "xy-home-v2:default:cs-avatar-partner";
-  // 1.优先读取localStorage存储，不碰聊天框DOM
-  let storedAvatar = localStorage.getItem(STORAGE_PARTNER_AVATAR_KEY);
-  if (storedAvatar && storedAvatar.startsWith("data:image/")) {
+  let storedAvatar = null;
+    try {
+    storedAvatar = localStorage.getItem(STORAGE_PARTNER_AVATAR_KEY);
+  } catch (err) {
+    log("[getOriginDreamAvatarSrc]读取头像异常", err);
+    return null;
+  }
+  //严格校验base64头像格式
+  if (storedAvatar && typeof storedAvatar === "string" && storedAvatar.startsWith("data:image/")) {
     return storedAvatar;
   }
-
-  // 2.DOM降级方案：⚠️ 绝对排除#chat‑body容器内全部元素，只取页面顶层的角色头像
+  //DOM降级兜底，严格排除#chat‑body聊天框，避免抓到用户头像
   const chatBodyDom = document.querySelector("#chat-body");
   let candidateList = Array.from(document.querySelectorAll("img"));
-  // 过滤：过滤掉位于#chat‑body内部的图片
   if (chatBodyDom) {
     candidateList = candidateList.filter(img => !chatBodyDom.contains(img));
   }
-  // 筛选base64头像图片
-  const partnerImg = candidateList.find(img=>img.src && img.src.startsWith("data:image/"));
-  if (partnerImg?.src) {
-    return partnerImg.src;
-  }
-  return null;
+  const partnerImg = candidateList.find(img => img?.src && img.src.startsWith("data:image/"));
+  return partnerImg?.src || null;
 }
 // ========================================================
   function defaultData() {
@@ -236,6 +245,46 @@ function getOriginDreamAvatarSrc() {
       return false;
     }
   }
+  /**
+ * 保存气泡列表到localStorage实现刷新不丢失
+ * @param {Array} bubbleArr 气泡对象数组 {id,text,timestamp}
+ */
+function saveBubbleList(bubbleArr) {
+  try {
+    //裁剪最大条数，避免base64头像撑爆存储
+    const list = bubbleArr.slice(-MAX_SAVE_BUBBLE);
+    localStorage.setItem(STORAGE_BUBBLE_KEY, JSON.stringify(list));
+  } catch (e) {
+    log("[Audit]气泡持久化存储失败", e);
+  }
+}
+
+/**
+ * 读取持久化气泡列表
+ * @returns {Array}
+ */
+function loadBubbleList() {
+  try {
+    const raw = localStorage.getItem(STORAGE_BUBBLE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    log("[Audit]读取持久气泡失败", e);
+    return [];
+  }
+}
+
+/**
+ * 单条气泡加入持久化列表
+ * @param {Object} bubbleItem
+ * @param {Array} currentList
+ * @returns {Array}新数组
+ */
+function pushBubbleItem(bubbleItem, currentList) {
+  const next = [...currentList, bubbleItem];
+  saveBubbleList(next);
+  return next;
+}
   function injectCSS(css, id) {
     try {
       const styleId = id || 'my-audit-global-css';
@@ -737,8 +786,11 @@ function getOriginDreamAvatarSrc() {
         }
         inner.style.background = s.color || '#3b82f6';
         inner.style.fontSize = Math.max(14, Math.floor((s.size || 56) * 0.4)) + 'px';
-        if (s.avatar) {
-          inner.innerHTML = '<img src="' + s.avatar + '" alt="">';
+        //悬浮球优先读取原网页梦角头像，脚本设置头像作为降级兜底
+        const originDreamAvatar = getOriginDreamAvatarSrc();
+        const finalBallAvatar = originDreamAvatar || s.avatar;
+        if (finalBallAvatar) {
+          inner.innerHTML = '<img src="' + finalBallAvatar + '" alt="">';
         } else {
           inner.innerHTML = '✍';
         }
@@ -1775,36 +1827,42 @@ function saveInjectedMsgs() {
   }
 }
     function injectBubbleToChat(text, side) {
-        var renderSuccess = false;
+  var renderSuccess = false;
+  try {
+    var now = Date.now();
+    var useSide = side === 'out' ? 'out' : 'in';
+    // 给梦角消息打上标记，区分角色，方便渲染时加载正确头像
+    var newMsg = {
+      side: useSide,
+      text: text,
+      time: now,
+      isPartnerMsg: useSide === 'in'
+    };
+    try {
+      var cid = 'default';
+      var store = null;
+      try {
+        if (window.storeFor) store = window.storeFor(cid);
+        else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
+      } catch(e) {}
+
+      var storeData = null;
+      if (store && typeof store.get === 'function') {
         try {
-            var now = Date.now();
-            var useSide = side === 'out' ? 'out' : 'in';
-            var newMsg = { side: useSide, text: text, time: now };
-
-            try {
-                var cid = 'default';
-                var store = null;
-                try {
-                    if (window.storeFor) store = window.storeFor(cid);
-                    else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
-                } catch(e) {}
-
-                var storeData = null;
-                if (store && typeof store.get === 'function') {
-                    try {
-                        storeData = store.get('chat-msgs');
-                        var targetArr = null;
-                        if (Array.isArray(storeData)) targetArr = storeData;
-                        else if (storeData && typeof storeData === 'object') {
-                            for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
-                        }
-                        if (targetArr) {
-                            targetArr.push(newMsg);
-                            if (typeof store.set === 'function') store.set('chat-msgs', storeData);
-                            else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
-                        }
-                    } catch(err) {}
-                }
+          storeData = store.get('chat-msgs');
+          var targetArr = null;
+          if (Array.isArray(storeData)) targetArr = storeData;
+          else if (storeData && typeof storeData === 'object') {
+            for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
+          }
+          if (targetArr) {
+            targetArr.push(newMsg);
+            if (typeof store.set === 'function') store.set('chat-msgs', storeData);
+            else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
+          }
+        } catch(err) {}
+      }
+    }
 
                 var LS_KEY = 'xy-home-v2:' + cid + ':chat-msgs';
                 try {
@@ -1889,12 +1947,16 @@ function saveInjectedMsgs() {
                     if (colorVar && colorVar.trim()) bubbleStyle.color = colorVar.trim();
                 }
 
-                var avatarRadius = '4px';
+                                var avatarRadius = '4px';
+                // 不再从chat‑body内部抓取图片，改用我们封装的getOriginDreamAvatarSrc()读取原站localStorage梦角头像
+                // 只从sampleAvatar提取圆角样式，不再clone整个img节点！
                 var sampleAvatar = chatBody.querySelector('img');
                 if (sampleAvatar) {
                     var sa = window.getComputedStyle(sampleAvatar);
                     if (sa.borderRadius) avatarRadius = sa.borderRadius;
                 }
+                // ⭐【重点】每次渲染气泡现场读取梦角头像，禁止全局缓存！
+                const dreamAvatarSrc = getOriginDreamAvatarSrc();
 
                 var wrapper = document.createElement('div');
                 wrapper.setAttribute('data-ma-injected', '1');
@@ -1904,10 +1966,13 @@ function saveInjectedMsgs() {
                 leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 10px; flex-shrink: 0; width: 40px;';
 
                 var avatarEl;
-                if (sampleAvatar) {
-                    avatarEl = sampleAvatar.cloneNode();
+                if (dreamAvatarSrc) {
+                    // 拿到有效base64头像 → 创建全新img，不clone聊天框内任何图片
+                    avatarEl = document.createElement('img');
+                    avatarEl.src = dreamAvatarSrc;
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; object-fit: cover;';
                 } else {
+                    // 获取头像失败，使用灰色占位div
                     avatarEl = document.createElement('div');
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; background: #ddd;';
                 }
@@ -1982,10 +2047,13 @@ function saveInjectedMsgs() {
                 wrapper.setAttribute('data-ma-injected', '1');
                 wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 14px; padding: 0 10px; width: 100%; box-sizing: border-box;';
 
+                //自愈重建气泡：现场读取梦角头像，禁止全局缓存
+                const dreamAvatarSrc = getOriginDreamAvatarSrc();
                 var avatarEl;
-                if (sampleAvatar) {
-                    avatarEl = document.createElement('div');
-                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; background:#cfe2ff;';
+                if (dreamAvatarSrc) {
+                    avatarEl = document.createElement('img');
+                    avatarEl.src = dreamAvatarSrc;
+                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; object-fit: cover;';
                 } else {
                     avatarEl = document.createElement('div');
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; background: #ddd;';
