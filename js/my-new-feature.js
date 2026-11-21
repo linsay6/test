@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Mochi梦角字卡·双人审核完整版
 // @namespace    https://github.com/yourname/yourrepo
-// @version      3.3.0
-// @description  九宫格审核图标、悬浮球、梦角引擎、双人审批、审核报告字卡Tab、圆形/方形裁剪、移动端顺滑拖拽、通知、自定义昵称、多开关引擎
+// @version      3.4.0
+// @description  九宫格审核图标、悬浮球、梦角引擎、双人审批、审核报告字卡Tab、圆形/方形裁剪、移动端顺滑拖拽、通知、自定义昵称、多开关引擎、吸顶工具栏、恢复发送/禁用功能
 // @author       You
 // @match        *://*/*
 // @grant        none
@@ -524,7 +524,20 @@
       color: #fff;
     }
 
-    .cc-audit-toolbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+    /* 吸顶工具栏 */
+    .cc-audit-toolbar { 
+      display: flex; flex-direction: column; gap: 8px; 
+      position: sticky; top: 0; z-index: 20; 
+      background: #fff; padding: 12px 0 10px; 
+      margin-top: -12px;
+      border-bottom: 1px solid #f3f4f6;
+      box-shadow: 0 4px 6px -6px rgba(0,0,0,0.1);
+    }
+    .audit-tab-content .cc-audit-toolbar {
+      top: -14px; /* 抵消父级padding */
+      padding-top: 14px;
+      margin-top: -14px;
+    }
     .cc-audit-toolbar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .cc-audit-textarea {
       width: 100%; min-height: 64px; resize: vertical;
@@ -561,14 +574,6 @@
     .cc-badge.both { border-color: #fca5a5; color: #991b1b; background: #fff5f5; }
     .cc-check { width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }
     .cc-audit-empty { padding: 30px 0; text-align: center; color: #9ca3af; font-size: 12px; }
-    
-    /* Loading 遮罩 */
-    .cc-loading {
-      display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.7);
-      z-index: 100001; align-items: center; justify-content: center;
-      font-size: 14px; color: #3b82f6; font-weight: bold;
-    }
-    .cc-loading.active { display: flex; }
   `);
 
   /* ============================================================
@@ -852,7 +857,6 @@
                 const drawW = img.width * scale;
                 const drawH = img.height * scale;
                 
-                // 边界钳位：限制图片边缘在可视区内，或者最多偏移图片宽高的一半
                 const limitX = drawW / 2;
                 const limitY = drawH / 2;
                 offsetX = Math.min(Math.max(offsetX, -limitX), limitX);
@@ -1044,6 +1048,10 @@
           return;
         }
         const cats = window.__MY_AUDIT__.data.categories;
+        
+        // 动态获取昵称
+        const currentMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+        
         let html = '';
         html += '<div class="audit-batch-bar">' +
           '<label><input type="checkbox" id="pending-select-all"> 全选</label>' +
@@ -1054,20 +1062,26 @@
           '</div>';
         list.forEach(function (item, idx) {
           const label = ACTION_LABEL[item.action] || item.action;
+          let senderName = item.sender;
+          // 兼容老数据：如果发件人是'梦角'且配置改了名字，则动态展示新名字
+          if (senderName === '梦角' && currentMjName !== '梦角') {
+            senderName = currentMjName;
+          }
+          
           let desc = '';
           let extra = '';
           if (item.action === 'add') {
-            desc = '[' + escapeHTML(item.sender) + '] 申请新增字卡：「' + escapeHTML(item.targetText) + '」';
+            desc = '[' + escapeHTML(senderName) + '] 申请新增字卡：「' + escapeHTML(item.targetText) + '」';
             extra = '<span>存入分类：</span><select class="audit-select pending-target-sel" data-idx="' + idx + '">' +
               cats.map(function (c) {
                 return '<option value="' + c.id + '"' + (item.targetCategory === c.id ? ' selected' : '') + '>' + escapeHTML(c.name) + '</option>';
               }).join('') + '</select>';
           } else if (item.action === 'delete') {
-            desc = '[' + escapeHTML(item.sender) + '] 申请删除字卡：「' + escapeHTML(item.targetText) + '」';
+            desc = '[' + escapeHTML(senderName) + '] 申请删除字卡：「' + escapeHTML(item.targetText) + '」';
           } else if (item.action === 'disable') {
-            desc = '[' + escapeHTML(item.sender) + '] 申请禁用字卡：「' + escapeHTML(item.targetText) + '」';
+            desc = '[' + escapeHTML(senderName) + '] 申请禁用字卡：「' + escapeHTML(item.targetText) + '」';
           } else if (item.action === 'move') {
-            desc = '[' + escapeHTML(item.sender) + '] 申请将「' + escapeHTML(item.targetText) + '」从【' + escapeHTML(item.sourceCatName || '未知分类') +
+            desc = '[' + escapeHTML(senderName) + '] 申请将「' + escapeHTML(item.targetText) + '」从【' + escapeHTML(item.sourceCatName || '未知分类') +
               '】迁移至【' + escapeHTML(item.targetCatName || '未知分类') + '】';
             extra = '<span>源分类：</span><select class="audit-select pending-source-sel" data-idx="' + idx + '">' +
               cats.map(function (c) {
@@ -1078,7 +1092,7 @@
                 return '<option value="' + c.id + '"' + (item.targetCategory === c.id ? ' selected' : '') + '>' + escapeHTML(c.name) + '</option>';
               }).join('') + '</select>';
           } else if (item.action === 'restore') {
-            desc = '[' + escapeHTML(item.sender) + '] 申请恢复启用字卡：「' + escapeHTML(item.targetText) + '」';
+            desc = '[' + escapeHTML(senderName) + '] 申请恢复启用字卡：「' + escapeHTML(item.targetText) + '」';
           }
           html += '<div class="audit-pending-item">' +
             '<input type="checkbox" class="pending-check audit-pending-checkbox" data-idx="' + idx + '" style="margin-top:3px;">' +
@@ -1087,7 +1101,7 @@
               '<span class="audit-pending-desc">' + desc + '</span></div>' +
               (extra ? '<div class="audit-pending-extra">' + extra + '</div>' : '') +
               '<div class="audit-pending-extra"><span>备注：</span><input type="text" class="audit-input pending-remark" data-idx="' + idx + '" value="' + escapeHTML(item.remark||'') + '" placeholder="审批备注..."></div>' +
-              '<div class="audit-pending-sender">发件人：' + escapeHTML(item.sender) + ' · ' + new Date(item.time).toLocaleString() + '</div>' +
+              '<div class="audit-pending-sender">发件人：' + escapeHTML(senderName) + ' · ' + new Date(item.time).toLocaleString() + '</div>' +
             '</div>' +
             '<div class="audit-pending-actions">' +
               '<button class="audit-btn audit-btn-sm pending-approve" data-idx="' + idx + '">同意</button>' +
@@ -1320,10 +1334,15 @@
           } else {
             filtered.forEach(function (h) {
               const label = ACTION_LABEL[h.action] || h.action;
+              let senderName = h.sender;
+              const currentMjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+              if (senderName === '梦角' && currentMjName !== '梦角') {
+                senderName = currentMjName;
+              }
               hHtml += '<div class="audit-history-item">' +
                 '<div>' +
                   '<div><b>' + label + '</b> · ' + escapeHTML(h.targetText || '') + '</div>' +
-                  '<div style="color:#9ca3af;margin-top:3px;">' + escapeHTML(h.sender) + ' · ' + new Date(h.time).toLocaleString() + ' · 审核于 ' + new Date(h.auditTime).toLocaleString() + '</div>' +
+                  '<div style="color:#9ca3af;margin-top:3px;">' + escapeHTML(senderName) + ' · ' + new Date(h.time).toLocaleString() + ' · 审核于 ' + new Date(h.auditTime).toLocaleString() + '</div>' +
                   (h.remark ? '<div style="color:#3b82f6;font-size:11px;margin-top:2px;">备注: ' + escapeHTML(h.remark) + '</div>' : '') +
                 '</div>' +
                 '<div class="audit-history-result result-' + (h.result === 'approve' ? 'approve' : 'reject') + '">' +
@@ -2343,10 +2362,12 @@
               (card.disabledType === 'both' ? '双方禁用' : '单方禁用') + '</span>';
           }
           html += '<span class="cc-card-ops">';
-          html += '<button class="audit-btn audit-btn-sm cc-card-op" data-op="copy" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">复制</button>';
+          html += '<button class="audit-btn audit-btn-sm cc-card-op" data-op="send" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">发送</button>';
           html += '<button class="audit-btn audit-btn-sm cc-card-op" data-op="edit" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">编辑</button>';
           if (card.disabled) {
             html += '<button class="audit-btn audit-btn-sm cc-card-op" data-op="restore" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">恢复</button>';
+          } else {
+            html += '<button class="audit-btn audit-btn-sm cc-card-op" data-op="disable" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">禁用</button>';
           }
           html += '<button class="audit-btn audit-btn-danger audit-btn-sm cc-card-op" data-op="delete" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">删除</button>';
           html += '</span>';
@@ -2649,18 +2670,24 @@
               if (!cat) return;
               const card = cat.cards.find(function (c) { return c.id === cardId; });
               if (!card) return;
-              if (op === 'copy') {
-                try {
-                  navigator.clipboard.writeText(card.text);
-                  toast('已复制到剪贴板');
-                } catch (err) {
-                  toast('复制失败', '#b91c1c');
+              
+              if (op === 'send') {
+                if (typeof window.sendAuditCard === 'function') {
+                  window.sendAuditCard(card.text, 'in');
+                  toast('已发送到聊天');
+                } else {
+                  toast('发送能力未就绪', '#b45309');
                 }
               } else if (op === 'edit') {
                 const text = prompt('编辑字卡内容：', card.text);
                 if (text == null) return;
                 if (!text.trim()) return toast('内容不能为空', '#b91c1c');
                 card.text = text.trim();
+                window.__MY_AUDIT__.save();
+                refresh();
+              } else if (op === 'disable') {
+                card.disabled = true;
+                card.disabledType = 'single';
                 window.__MY_AUDIT__.save();
                 refresh();
               } else if (op === 'restore' || op === 'enable') {
