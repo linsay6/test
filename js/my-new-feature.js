@@ -52,7 +52,35 @@
       }
     } catch(e) {}
   }
-  
+  // ============== 新增：梦角头像获取工具函数 ==============
+/**
+ * 获取原站存储的梦角(TA)头像，优先localStorage，DOM降级；彻底跳过#chat‑body聊天容器，杜绝窜头像bug
+ * 注意：已渲染完成的气泡DOM不会热更新头像；仅新消息、页面刷新生效
+ * @returns {string|null} 头像base64 src，获取失败返回null
+ */
+function getOriginDreamAvatarSrc() {
+  const STORAGE_PARTNER_AVATAR_KEY = "xy-home-v2:default:cs-avatar-partner";
+  // 1.优先读取localStorage存储，不碰聊天框DOM
+  let storedAvatar = localStorage.getItem(STORAGE_PARTNER_AVATAR_KEY);
+  if (storedAvatar && storedAvatar.startsWith("data:image/")) {
+    return storedAvatar;
+  }
+
+  // 2.DOM降级方案：⚠️ 绝对排除#chat‑body容器内全部元素，只取页面顶层的角色头像
+  const chatBodyDom = document.querySelector("#chat-body");
+  let candidateList = Array.from(document.querySelectorAll("img"));
+  // 过滤：过滤掉位于#chat‑body内部的图片
+  if (chatBodyDom) {
+    candidateList = candidateList.filter(img => !chatBodyDom.contains(img));
+  }
+  // 筛选base64头像图片
+  const partnerImg = candidateList.find(img=>img.src && img.src.startsWith("data:image/"));
+  if (partnerImg?.src) {
+    return partnerImg.src;
+  }
+  return null;
+}
+// ========================================================
   function defaultData() {
     return {
       categories: [
@@ -220,7 +248,7 @@
       log('[Audit] CSS注入失败', e);
     }
   }
-   function toast(msg, color) {
+  function toast(msg, color) {
     try {
       let box = document.getElementById('audit-toast');
       if (!box) {
@@ -232,8 +260,10 @@
         document.body.appendChild(box);
       }
       box.textContent = msg;
+      // 修复BUG：每次调用toast强制读取最新配置，无论盒子是否已经存在
       const cfgBg = window.__MY_AUDIT__?.data?.settings?.toastBgColor;
-      box.style.background = color || cfgBg || 'rgba(17,24,39,.9)';
+      const finalBg = color || cfgBg || 'rgba(17,24,39,.9)';
+      box.style.background = finalBg;
       box.style.opacity = '1';
       clearTimeout(box._timer);
       box._timer = setTimeout(() => { box.style.opacity = '0'; }, 2200);
