@@ -1703,7 +1703,23 @@
     }
 
     /* ---------------- 消息发送 ---------------- */
-    const INJECTED_MSGS = [];
+    const INJECTED_STORAGE_KEY = "mochi_injected_msg_list";
+let INJECTED_MSGS = [];
+// 从本地存储读取
+try {
+  const raw = localStorage.getItem(INJECTED_STORAGE_KEY);
+  if (raw) INJECTED_MSGS = JSON.parse(raw);
+} catch (e) {
+  INJECTED_MSGS = [];
+}
+
+function saveInjectedMsgs() {
+  try {
+    localStorage.setItem(INJECTED_STORAGE_KEY, JSON.stringify(INJECTED_MSGS));
+  } catch (e) {
+    console.warn("消息本地存储失败", e);
+  }
+}
     function injectBubbleToChat(text, side) {
         var renderSuccess = false;
         try {
@@ -1765,6 +1781,7 @@
 
                 INJECTED_MSGS.push(newMsg);
                 if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
+              saveInjectedMsgs();
             } catch (dataErr) {}
 
             var chatBody = document.getElementById('chat-body');
