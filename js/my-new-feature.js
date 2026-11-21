@@ -53,7 +53,7 @@
     } catch(e) {}
   }
   
-  function defaultData() {
+    function defaultData() {
     return {
       categories: [
         { id: 'cat-biaodian', name: '标点', disabled: false, collapsed: false, order: 1, cards: [] },
@@ -62,6 +62,7 @@
       ],
       pending: [],
       history: [],
+      injectedChatMsgs:[], //持久化脚本发送消息【新增】
       settings: {
         iconCustom: null,
         floatingBall: {
@@ -85,7 +86,10 @@
         notifyEnabled: true,
         notifyRejected: false,
         debugMode: true,
-        mengjiaoName: '梦角'
+        mengjiaoName: '梦角',
+        // toast弹窗自定义配色【新增】
+        toastBgColor:'rgba(59, 130, 246,.9)',
+        toastTextColor:'#ffffff'
       }
     };
   }
@@ -162,19 +166,22 @@
       parsed = migrateLegacy(parsed) || {};
       const base = defaultData();
       const merged = {
-        categories: Array.isArray(parsed.categories) && parsed.categories.length ? parsed.categories : base.categories,
-        pending: Array.isArray(parsed.pending) ? parsed.pending.map(normalizePending) : [],
-        history: Array.isArray(parsed.history) ? parsed.history.slice(-100) : [],
-        settings: {
-          iconCustom: parsed.settings && parsed.settings.iconCustom ? parsed.settings.iconCustom : null,
-          floatingBall: Object.assign({}, base.settings.floatingBall, (parsed.settings || {}).floatingBall || {}),
-          dreamEngine: Object.assign({}, base.settings.dreamEngine, (parsed.settings || {}).dreamEngine || {}),
-          notifyEnabled: parsed.settings && typeof parsed.settings.notifyEnabled === 'boolean' ? parsed.settings.notifyEnabled : base.settings.notifyEnabled,
-          notifyRejected: parsed.settings && typeof parsed.settings.notifyRejected === 'boolean' ? parsed.settings.notifyRejected : base.settings.notifyRejected,
-          debugMode: parsed.settings && typeof parsed.settings.debugMode === 'boolean' ? parsed.settings.debugMode : base.settings.debugMode,
-          mengjiaoName: (parsed.settings && parsed.settings.mengjiaoName) || base.settings.mengjiaoName
-        }
-      };
+          categories: Array.isArray(parsed.categories) && parsed.categories.length ? parsed.categories : base.categories,
+          pending: Array.isArray(parsed.pending) ? parsed.pending.map(normalizePending) : [],
+          history: Array.isArray(parsed.history) ? parsed.history.slice(-100) : [],
+          injectedChatMsgs: Array.isArray(parsed.injectedChatMsgs) ? parsed.injectedChatMsgs.slice(-100) : [],
+          settings: {
+            iconCustom: parsed.settings && parsed.settings.iconCustom ? parsed.settings.iconCustom : null,
+            floatingBall: Object.assign({}, base.settings.floatingBall, (parsed.settings || {}).floatingBall || {}),
+            dreamEngine: Object.assign({}, base.settings.dreamEngine, (parsed.settings || {}).dreamEngine || {}),
+            notifyEnabled: parsed.settings && typeof parsed.settings.notifyEnabled === 'boolean' ? parsed.settings.notifyEnabled : base.settings.notifyEnabled,
+            notifyRejected: parsed.settings && typeof parsed.settings.notifyRejected === 'boolean' ? parsed.settings.notifyRejected : base.settings.notifyRejected,
+            debugMode: parsed.settings && typeof parsed.settings.debugMode === 'boolean' ? parsed.settings.debugMode : base.settings.debugMode,
+            mengjiaoName: (parsed.settings && parsed.settings.mengjiaoName) || base.settings.mengjiaoName,
+            toastBgColor: (parsed.settings && parsed.settings.toastBgColor) || base.settings.toastBgColor,
+            toastTextColor: (parsed.settings && parsed.settings.toastTextColor) || base.settings.toastTextColor
+          }
+        };
       merged.categories.forEach((c, i) => {
         c.id = c.id || genId();
         c.name = c.name || ('分类' + (i + 1));
@@ -220,17 +227,22 @@
   }
   function toast(msg, color) {
     try {
+      const s = window.__MY_AUDIT__.data.settings;
       let box = document.getElementById('audit-toast');
       if (!box) {
         box = document.createElement('div');
         box.id = 'audit-toast';
         box.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);' +
-          'padding:8px 14px;border-radius:8px;background:rgba(17,24,39,.9);color:#fff;' +
-          'font-size:13px;z-index:100002;pointer-events:none;opacity:0;transition:opacity .2s;';
+          'padding:8px 14px;border-radius:8px;font-size:13px;z-index:100002;pointer-events:none;opacity:0;transition:opacity .2s;';
         document.body.appendChild(box);
       }
       box.textContent = msg;
-      box.style.background = color || 'rgba(17,24,39,.9)';
+      if(color){
+        box.style.background = color;
+      }else{
+        box.style.background = s.toastBgColor;
+      }
+      box.style.color = s.toastTextColor;
       box.style.opacity = '1';
       clearTimeout(box._timer);
       box._timer = setTimeout(() => { box.style.opacity = '0'; }, 2200);
@@ -1465,7 +1477,7 @@
               '<div class="settings-controls"><input type="number" min="1" max="99" id="engine-max" class="audit-input" style="width:80px;"></div>' +
             '</div>' +
           '</div>' +
-          '<div class="settings-section">' +
+         '<div class="settings-section">' +
             '<h4>其他设置</h4>' +
             '<div class="settings-row">' +
               '<span class="settings-label">系统通知</span>' +
@@ -1475,7 +1487,21 @@
               '<span class="settings-label">调试日志</span>' +
               '<div class="settings-controls"><input type="checkbox" id="debug-mode"></div>' +
             '</div>' +
-          '</div>' +
+            '<div class="settings-row">' +
+              '<span class="settings-label">页面toast背景色</span>' +
+              '<div class="settings-controls">' +
+                '<input type="color" id="toast-bg-color">' +
+                '<button class="audit-btn audit-btn-sm" id="toast-bg-reset">重置</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="settings-row">' +
+              '<span class="settings-label">页面toast文字颜色</span>' +
+              '<div class="settings-controls">' +
+                '<input type="color" id="toast-text-color">' +
+                '<button class="audit-btn audit-btn-sm" id="toast-text-reset">重置</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
           '<div class="settings-section">' +
             '<h4>数据备份</h4>' +
             '<div class="settings-row">' +
@@ -1648,6 +1674,29 @@
           s.debugMode = dMode.checked;
           window.__MY_AUDIT__.save();
         };
+        //===== toast配色设置事件【新增】=====
+        const toastBgInput = pane.querySelector('#toast-bg-color');
+        const toastTextInput = pane.querySelector('#toast-text-color');
+        toastBgInput.value = s.toastBgColor;
+        toastTextInput.value = s.toastTextColor;
+        toastBgInput.oninput = function(){
+          s.toastBgColor = toastBgInput.value;
+          window.__MY_AUDIT__.save();
+        };
+        pane.querySelector('#toast-bg-reset').onclick = function(){
+          s.toastBgColor = 'rgba(59, 130, 246,.9)';
+          window.__MY_AUDIT__.save();
+          renderSettings();
+        };
+        toastTextInput.oninput = function(){
+          s.toastTextColor = toastTextInput.value;
+          window.__MY_AUDIT__.save();
+        };
+        pane.querySelector('#toast-text-reset').onclick = function(){
+          s.toastTextColor = '#ffffff';
+          window.__MY_AUDIT__.save();
+          renderSettings();
+        };
 
         pane.querySelector('#data-export').onclick = function () {
           try {
@@ -1765,6 +1814,12 @@
 
                 INJECTED_MSGS.push(newMsg);
                 if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
+              //持久化保存，刷新不会丢【新增】
+                window.__MY_AUDIT__.data.injectedChatMsgs.push(newMsg);
+                if(window.__MY_AUDIT__.data.injectedChatMsgs.length>100){
+                  window.__MY_AUDIT__.data.injectedChatMsgs.shift();
+                }
+                window.__MY_AUDIT__.save();
             } catch (dataErr) {}
 
             var chatBody = document.getElementById('chat-body');
@@ -1864,9 +1919,13 @@
         } catch (globalErr) {}
         return renderSuccess;
     }
-
-    function checkAndRepairChat() {
+        function checkAndRepairChat() {
         var chatBody = document.getElementById('chat-body');
+        //页面刷新：把持久化存储的消息加载进内存数组【新增】
+        if(window.__MY_AUDIT__ && Array.isArray(window.__MY_AUDIT__.data.injectedChatMsgs)){
+          INJECTED_MSGS.length=0;
+          INJECTED_MSGS.push(...window.__MY_AUDIT__.data.injectedChatMsgs);
+        }
         if (!chatBody || INJECTED_MSGS.length === 0) return;
 
         var bubbleStyle = {
