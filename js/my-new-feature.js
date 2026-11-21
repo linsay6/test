@@ -187,6 +187,8 @@
           card.text = card.text || '';
           card.disabled = !!card.disabled;
           card.disabledType = card.disabledType || 'single';
+          //兼容旧数据，没有就为空
+          if(card.disabledBy === undefined) card.disabledBy = "";
         });
       });
       return merged;
@@ -768,23 +770,12 @@
               if (e.cancelable) e.preventDefault();
             } catch (err) {}
           };
-          const onUp = function () {
+         const onUp = function () {
             if (!dragging) return;
             dragging = false;
             ball.style.transition = 'transform .2s ease';
-            
-            const vv = window.visualViewport || { width: window.innerWidth };
-            const size = window.__MY_AUDIT__.data.settings.floatingBall.size || 56;
-            let finalX = pendingX != null ? pendingX : bx;
-            if (finalX + size / 2 < vv.width / 2) {
-              finalX = 0;
-            } else {
-              finalX = vv.width - size;
-            }
-            pendingX = finalX;
             if (pendingY == null) pendingY = by;
             if (!rafId) rafId = requestAnimationFrame(applyFrame);
-            
             try { window.__MY_AUDIT__.save(); } catch (e) {}
           };
 
@@ -1216,10 +1207,12 @@
           if (!hit) { toast('未找到对应字卡', '#b45309'); return false; }
           hit.card.disabled = true;
           hit.card.disabledType = item.disabledType === 'both' ? 'both' : 'single';
+          hit.card.disabledBy = item.sender || '';
         } else if (item.action === 'restore') {
           const hit = findCard(item);
           if (!hit) { toast('未找到对应字卡', '#b45309'); return false; }
           hit.card.disabled = false;
+          hit.card.disabledBy = "";
         } else if (item.action === 'move') {
           if (item.sourceCatId === item.targetCategory) {
             toast('源分类与目标分类不能相同', '#b91c1c'); return false;
@@ -1710,8 +1703,161 @@
     }
 
     /* ---------------- 消息发送 ---------------- */
-    const INJECTED_MSGS = [];
+        const INJECTED_STORAGE_KEY = "audit-injected-msgs";
+    let INJECTED_MSGS = [];
+    //页面启动读取持久化模拟消息
+    function loadInjectedMessages(){
+      try{
+        const raw = localStorage.getItem(INJECTED_STORAGE_KEY);
+        if(raw){
+          INJECTED_MSGS = JSON.parse(raw);
+        }
+      }catch(e){ INJECTED_MSGS = []; }
+    }
+    function saveInjectedMessages(){
+      try{
+        localStorage.setItem(INJECTED_STORAGE_KEY, JSON.stringify(INJECTED_MSGS));
+      }catch(e){}
+    }
+    loadInjectedMessages();
+
     function injectBubbleToChat(text, side) {
+        var renderSuccess = false;
+        try {
+            var now = Date.now();
+            var useSide = side === 'out' ? 'out' : 'in';
+            var newMsg = { side: useSide, text: text, time: now };
+            try {
+                var cid = 'default';
+                var store = null;
+                try {
+                    if (window.storeFor) store = window.storeFor(cid);
+                    else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
+                } catch(e) {}
+                var storeData = null;
+                if (store && typeof store.get === 'function') {
+                    try {
+                        storeData = store.get('chat-msgs');
+                        var targetArr = null;
+                        if (Array.isArray(storeData)) targetArr = storeData;
+                        else if (storeData && typeof storeData === 'object') {
+                            for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
+                        }
+                        if (targetArr) {
+                            targetArr.push(newMsg);
+                            if (typeof store.set === 'function') store.set('chat-msgs', storeData);
+                            else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
+                        }
+                    } catch(err) {}
+                }
+                var LS_KEY = 'xy-home-v2:' + cid + ':chat-msgs';
+                try {
+                    var raw = localStorage.getItem(LS_KEY);
+                    var parsed = null;
+                    if (raw && raw !== '[object Object]' && raw !== 'undefined' && raw !== 'null') {
+                        try { parsed = JSON.parse(raw); } catch(e) { parsed = null; }
+                    }
+                    if (!parsed) {
+                        localStorage.setItem(LS_KEY, JSON.stringify([newMsg]));
+                    } else {
+                        var lsTarget = null;
+                        if (Array.isArray(parsed)) {
+                            lsTarget = parsed;
+                            lsTarget.push(newMsg);
+                            localStorage.setItem(LS_KEY, JSON.stringify(lsTarget));
+                        } else if (parsed && typeof parsed === 'object') {
+                            for (var k in parsed) { if (Array.isArray(parsed[k])) { lsTarget = parsed[k]; break; } }
+                            if (lsTarget) {
+                                lsTarget.push(newMsg);
+                                localStorage.setItem(LS_KEY, JSON.stringify(parsed));
+                            }
+                        }
+                    }
+                } catch(e) {}
+                INJECTED_MSGS.push(newMsg);
+                if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
+                saveInjectedMessages();
+            } catch (dataErr) {}
+            var chatBody = document.getElementById('chat-body');
+            if (!chatBody) return true;
+            if (typeof window.renderWindow === 'function') {
+                try {
+                    window.renderWindow(false, false, true);
+                    if (typeof window.scrollToBottom === 'function') window.scrollToBottom();
+                    return true;
+                } catch (e) {}
+            }
+            try {
+                var bubbleStyle = {
+                    backgroundColor: '#ffffff', color: '#333333', borderRadius: '8px',
+                    padding: '10px 14px', fontSize: '15px', lineHeight: '1.5',
+                    maxWidth: '70%', boxSizing: 'border-box', wordBreak: 'break-all',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.05)', display: 'inline-block',
+                    whiteSpace: 'pre-wrap'
+                };
+                var sampleBubble = null;
+                var allCandidates = chatBody.querySelectorAll('.bubble, [class*="bubble"], [class*="msg-content"], .text');
+                for (var bIdx = allCandidates.length - 1; bIdx >= 0; bIdx--) {
+                    var b = allCandidates[bIdx];
+                    if (b.closest('[data-ma-injected="1"]')) continue;
+                    var cls = (b.className || '').toLowerCase();
+                    if (cls.indexOf('out') >= 0 || cls.indexOf('right') >= 0) continue;
+                    var rect = b.getBoundingClientRect();
+                    var parentRect = chatBody.getBoundingClientRect();
+                    var bg = window.getComputedStyle(b).backgroundColor;
+                    if (rect.left - parentRect.left < 100 && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+                        sampleBubble = b;
+                        break;
+                    }
+                }
+                if (sampleBubble) {
+                    var s = window.getComputedStyle(sampleBubble);
+                    bubbleStyle.backgroundColor = s.backgroundColor;
+                    bubbleStyle.color = s.color;
+                    bubbleStyle.borderRadius = s.borderRadius || '8px';
+                    var fs = parseInt(s.fontSize, 10);
+                    if (fs > 12 && fs < 20) bubbleStyle.fontSize = s.fontSize;
+                } else {
+                    var rootS = window.getComputedStyle(document.documentElement);
+                    var bgVar = rootS.getPropertyValue('--msg-bg') || rootS.getPropertyValue('--bubble-bg');
+                    var colorVar = rootS.getPropertyValue('--msg-color') || rootS.getPropertyValue('--bubble-color');
+                    if (bgVar && bgVar.trim()) bubbleStyle.backgroundColor = bgVar.trim();
+                    if (colorVar && colorVar.trim()) bubbleStyle.color = colorVar.trim();
+                }
+                //❗修复：不再clone原生聊天img头像，避免拿到用户自己头像；使用纯色方块
+                var avatarRadius = '4px';
+                var wrapper = document.createElement('div');
+                wrapper.setAttribute('data-ma-injected', '1');
+                wrapper.style.cssText = 'display: flex; align-items: flex-start; margin-bottom: 14px; padding: 0 10px; width: 100%; box-sizing: border-box;';
+
+                var leftCol = document.createElement('div');
+                leftCol.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-right: 10px; flex-shrink: 0; width: 40px;';
+
+                var avatarEl = document.createElement('div');
+                avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + avatarRadius + '; background:#cfe2ff;';
+
+                var timeEl = document.createElement('div');
+                timeEl.style.cssText = 'font-size: 10px; color: #999; margin-top: 4px; white-space: nowrap;';
+                var d = new Date();
+                timeEl.textContent = (d.getHours()<10?'0':'') + d.getHours() + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ':' + (d.getSeconds()<10?'0':'') + d.getSeconds();
+
+                leftCol.appendChild(avatarEl);
+                leftCol.appendChild(timeEl);
+
+                var bubble = document.createElement('div');
+                Object.assign(bubble.style, bubbleStyle);
+                bubble.textContent = text;
+                bubble.className = 'bubble msg-content';
+
+                wrapper.appendChild(leftCol);
+                wrapper.appendChild(bubble);
+                chatBody.appendChild(wrapper);
+                try { chatBody.scrollTop = chatBody.scrollHeight; window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+                renderSuccess = true;
+            } catch (domErr) {}
+        } catch (globalErr) {}
+        return renderSuccess;
+    }
         var renderSuccess = false;
         try {
             var now = Date.now();
@@ -1920,8 +2066,8 @@
 
                 var avatarEl;
                 if (sampleAvatar) {
-                    avatarEl = sampleAvatar.cloneNode();
-                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; object-fit: cover;';
+                    avatarEl = document.createElement('div');
+                    avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; background:#cfe2ff;';
                 } else {
                     avatarEl = document.createElement('div');
                     avatarEl.style.cssText = 'width: 40px; height: 40px; border-radius: ' + currentAvatarRadius + '; background: #ddd;';
@@ -2357,9 +2503,15 @@
           html += '<div class="cc-card' + (card.disabled ? ' cc-card-disabled' : '') + '" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">';
           html += '<input type="checkbox" class="cc-check cc-card-check" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">';
           html += '<span class="cc-card-text' + (card.disabled ? ' disabled' : '') + '">' + escapeHTML(card.text) + '</span>';
-          if (card.disabled) {
-            html += '<span class="cc-badge' + (card.disabledType === 'both' ? ' both' : '') + '">' +
-              (card.disabledType === 'both' ? '双方禁用' : '单方禁用') + '</span>';
+        if (card.disabled) {
+            let badgeText = '';
+            const mjName = window.__MY_AUDIT__.data.settings.mengjiaoName || '梦角';
+            if(card.disabledBy && card.disabledBy.length>0){
+              badgeText = escapeHTML(card.disabledBy) + "禁用";
+            }else{
+              badgeText = (card.disabledType === 'both' ? '双方禁用' : '单方禁用');
+            }
+            html += '<span class="cc-badge' + (card.disabledType === 'both' ? ' both' : '') + '">' + escapeHTML(badgeText) + '</span>';
           }
           html += '<span class="cc-card-ops">';
           html += '<button class="audit-btn audit-btn-sm cc-card-op" data-op="send" data-card-id="' + card.id + '" data-cat-id="' + cat.id + '">发送</button>';
@@ -2688,10 +2840,12 @@
               } else if (op === 'disable') {
                 card.disabled = true;
                 card.disabledType = 'single';
+                card.disabledBy = "我";
                 window.__MY_AUDIT__.save();
                 refresh();
               } else if (op === 'restore' || op === 'enable') {
                 card.disabled = false;
+                card.disabledBy = "";
                 window.__MY_AUDIT__.save();
                 refresh();
                 toast('已恢复启用');
