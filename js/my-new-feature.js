@@ -1759,70 +1759,73 @@
     const INJECTED_MSGS = [];
     function injectBubbleToChat(text, side) {
         var renderSuccess = false;
-        var now = Date.now();
-        var useSide = side === 'out' ? 'out' : 'in';
-        var newMsg = { side: useSide, text: text, time: now };
-        // =========【脚本独立持久化：无论原网站存储是否报错，这条消息必须存入脚本自己存储】=========
-        INJECTED_MSGS.push(newMsg);
-        if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
-        if(window.__MY_AUDIT__ && window.__MY_AUDIT__.data){
-            window.__MY_AUDIT__.data.injectedChatMsgs.push(newMsg);
-            if(window.__MY_AUDIT__.data.injectedChatMsgs.length>100){
-              window.__MY_AUDIT__.data.injectedChatMsgs.shift();
-            }
-            window.__MY_AUDIT__.save();
-        }
-        // =========下面是写入原网站聊天存储，允许失败，失败不会影响脚本自己的持久化=========
         try {
-            var cid = 'default';
-            var store = null;
+            var now = Date.now();
+            var useSide = side === 'out' ? 'out' : 'in';
+            var newMsg = { side: useSide, text: text, time: now };
+
             try {
-                if (window.storeFor) store = window.storeFor(cid);
-                else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
-            } catch(e) {}
-            var storeData = null;
-            if (store && typeof store.get === 'function') {
+                var cid = 'default';
+                var store = null;
                 try {
-                    storeData = store.get('chat-msgs');
-                    var targetArr = null;
-                    if (Array.isArray(storeData)) targetArr = storeData;
-                    else if (storeData && typeof storeData === 'object') {
-                        for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
-                    }
-                    if (targetArr) {
-                        targetArr.push(newMsg);
-                        if (typeof store.set === 'function') store.set('chat-msgs', storeData);
-                        else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
-                    }
-                } catch(err) {}
-            }
-            var LS_KEY = 'xy-home-v2:' + cid + ':chat-msgs';
-            try {
-                var raw = localStorage.getItem(LS_KEY);
-                var parsed = null;
-                if (raw && raw !== '[object Object]' && raw !== 'undefined' && raw !== 'null') {
-                    try { parsed = JSON.parse(raw); } catch(e) { parsed = null; }
+                    if (window.storeFor) store = window.storeFor(cid);
+                    else if (window.xyStore) store = window.xyStore('xy-home-v2:' + cid);
+                } catch(e) {}
+
+                var storeData = null;
+                if (store && typeof store.get === 'function') {
+                    try {
+                        storeData = store.get('chat-msgs');
+                        var targetArr = null;
+                        if (Array.isArray(storeData)) targetArr = storeData;
+                        else if (storeData && typeof storeData === 'object') {
+                            for (var k in storeData) { if (Array.isArray(storeData[k])) { targetArr = storeData[k]; break; } }
+                        }
+                        if (targetArr) {
+                            targetArr.push(newMsg);
+                            if (typeof store.set === 'function') store.set('chat-msgs', storeData);
+                            else if (typeof store.save === 'function') store.save('chat-msgs', storeData);
+                        }
+                    } catch(err) {}
                 }
-                if (!parsed) {
-                    localStorage.setItem(LS_KEY, JSON.stringify([newMsg]));
-                } else {
-                    var lsTarget = null;
-                    if (Array.isArray(parsed)) {
-                        lsTarget = parsed;
-                        lsTarget.push(newMsg);
-                        localStorage.setItem(LS_KEY, JSON.stringify(lsTarget));
-                    } else if (parsed && typeof parsed === 'object') {
-                        for (var k in parsed) { if (Array.isArray(parsed[k])) { lsTarget = parsed[k]; break; } }
-                        if (lsTarget) {
+
+                var LS_KEY = 'xy-home-v2:' + cid + ':chat-msgs';
+                try {
+                    var raw = localStorage.getItem(LS_KEY);
+                    var parsed = null;
+
+                    if (raw && raw !== '[object Object]' && raw !== 'undefined' && raw !== 'null') {
+                        try { parsed = JSON.parse(raw); } catch(e) { parsed = null; }
+                    }
+
+                    if (!parsed) {
+                        localStorage.setItem(LS_KEY, JSON.stringify([newMsg]));
+                    } else {
+                        var lsTarget = null;
+                        if (Array.isArray(parsed)) {
+                            lsTarget = parsed;
                             lsTarget.push(newMsg);
-                            localStorage.setItem(LS_KEY, JSON.stringify(parsed));
+                            localStorage.setItem(LS_KEY, JSON.stringify(lsTarget));
+                        } else if (parsed && typeof parsed === 'object') {
+                            for (var k in parsed) { if (Array.isArray(parsed[k])) { lsTarget = parsed[k]; break; } }
+                            if (lsTarget) {
+                                lsTarget.push(newMsg);
+                                localStorage.setItem(LS_KEY, JSON.stringify(parsed));
+                            }
                         }
                     }
+                } catch(e) {}
+
+                INJECTED_MSGS.push(newMsg);
+                if (INJECTED_MSGS.length > 50) INJECTED_MSGS.shift();
+              //持久化保存，刷新不会丢【新增】
+                window.__MY_AUDIT__.data.injectedChatMsgs.push(newMsg);
+                if(window.__MY_AUDIT__.data.injectedChatMsgs.length>100){
+                  window.__MY_AUDIT__.data.injectedChatMsgs.shift();
                 }
-            } catch(e) {}
-        } catch (dataErr) {
-            //原网站存储写入出错，仅忽略网站侧报错；脚本侧持久化已经在上层执行完毕，不受影响
-        }
+                window.__MY_AUDIT__.save();
+            } catch (dataErr) {}
+
             var chatBody = document.getElementById('chat-body');
             if (!chatBody) return true;
 
